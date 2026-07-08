@@ -1,0 +1,29 @@
+# Krayz Music License
+
+I chose the MIT License for this project because it is extremely permissive. You are free to take this code, run it on your own hardware, tear out the dual-bot routing logic for your own projects, or fork it to build something entirely new. 
+
+The only strict requirement is that you leave the original copyright and permission notice intact in your copies. Also, keep in mind that I provide this software exactly "as is." If you deploy this code and it accidentally wipes your database, leaks memory, or gets your Discord tokens banned, I am not liable for the damages. 
+
+---
+
+MIT License
+
+Copyright (c) 2026 Krayz Music
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

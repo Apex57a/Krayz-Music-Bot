@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.env
+env
+prisma/krayz.db
+lavalink/logs/
+lavalink/plugins/
+lavalink/Lavalink.jar
+*.log
+logs/
+database.json
+database_backup.json
+krayz_bot_deploy.tar.gz
+bot logs.tar.gz
+.maintenance
+AGENTS.md
+lavalink/application.yml
+bot.tar.gz
+create_tar.js
+mrbeast_scam.png
+script.js
+
+logs.txt
+Information.txt
+

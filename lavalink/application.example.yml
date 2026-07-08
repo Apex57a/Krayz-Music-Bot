@@ -1,0 +1,79 @@
+server:
+  port: 9001
+  address: 0.0.0.0
+
+lavalink:
+  plugins:
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.2"
+      repository: "https://maven.lavalink.dev/releases"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+      repository: "https://maven.lavalink.dev/releases"
+  server:
+    password: "youshallnotpass"
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      http: true
+      local: false
+    # Premium-Grade Audio Pipeline Tuning (Increased for shared hosting jitter)
+    bufferDurationMs: 10000
+    frameBufferDurationMs: 30000
+    youtubePlaylistLoadLimit: 20
+    playerUpdateInterval: 3000
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    gc-warnings: false
+    opusEncodingQuality: 10
+    resamplingQuality: HIGH
+    koe:
+      highPacketPriority: false
+      byteBufAllocator: "pooled"
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+      - TV
+    oauth:
+      enabled: true
+      refreshToken: "${YOUTUBE_OAUTH_REFRESH_TOKEN:1//0gpOvtzdzUy6JCgYIARAAGBASNwF-L9Irhp4k9jRoTHD6P-6_gByluD1LyoXW9WW8r6dWlhiQqH0AJCgdj46cYM3ZZU-EidvvJMU}"
+  lavasrc:
+    providers:
+      - "scsearch:%QUERY%"
+      - "scsearch:\"%ISRC%\""
+      - "spsearch:%QUERY%"
+      - "ytsearch:%QUERY%"
+    sources:
+      spotify: false
+      applemusic: false
+      deezer: false
+      yandexmusic: false
+      flowerytts: false
+      youtube: false
+    spotify:
+      clientId: "${SPOTIFY_CLIENT_ID:efbe6b1342a9495286859a5d0e9bb953}"
+      clientSecret: "${SPOTIFY_CLIENT_SECRET:1d1f7d9229b545b298f02e0ac1538a8d}"
+      countryCode: "IN"
+      playlistLoadLimit: 6
+      albumLoadLimit: 6
+
+logging:
+  file:
+    max-history: 30
+    max-size: 1GB
+  path: ./logs/
+
+  level:
+    root: INFO
+    lavalink: INFO
+    com.github.topi314.lavasrc: DEBUG
