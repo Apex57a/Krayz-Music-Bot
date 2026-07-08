@@ -6,10 +6,19 @@ import {
     PartialGuildMember,
     EmbedBuilder,
     Channel,
-    Role
+    TextChannel,
+    GuildChannel,
 } from 'discord.js';
 import { getGuildSettings } from './database';
 import { logger } from './logger';
+
+function getLogChannel(guild: any, channelId: string): TextChannel | null {
+    const channel = guild.channels.cache.get(channelId);
+    if (channel && channel.isTextBased() && !channel.isDMBased()) {
+        return channel as TextChannel;
+    }
+    return null;
+}
 
 export function setupLoggerEvents(client: Client) {
     client.on('messageDelete', async (message: Message | PartialMessage) => {
@@ -18,12 +27,12 @@ export function setupLoggerEvents(client: Client) {
         const settings = await getGuildSettings(message.guild.id);
         if (!settings.logChannelId || !settings.logMessages) return;
 
-        const logChannel = message.guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(message.guild, settings.logChannelId);
         if (!logChannel) return;
 
         const embed = new EmbedBuilder()
             .setAuthor({
-                name: `${message.author?.tag} (ID: ${message.author?.id})`,
+                name: `${message.author?.username} (ID: ${message.author?.id})`,
                 iconURL: message.author?.displayAvatarURL() || undefined
             })
             .setColor(0xFF0000)
@@ -45,12 +54,12 @@ export function setupLoggerEvents(client: Client) {
         const settings = await getGuildSettings(oldMessage.guild.id);
         if (!settings.logChannelId || !settings.logMessages) return;
 
-        const logChannel = oldMessage.guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(oldMessage.guild, settings.logChannelId);
         if (!logChannel) return;
 
         const embed = new EmbedBuilder()
             .setAuthor({
-                name: `${oldMessage.author?.tag} (ID: ${oldMessage.author?.id})`,
+                name: `${oldMessage.author?.username} (ID: ${oldMessage.author?.id})`,
                 iconURL: oldMessage.author?.displayAvatarURL() || undefined
             })
             .setColor(0xFFFF00)
@@ -68,7 +77,7 @@ export function setupLoggerEvents(client: Client) {
         const settings = await getGuildSettings(member.guild.id);
         if (!settings.logChannelId || !settings.logMembers) return;
 
-        const logChannel = member.guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(member.guild, settings.logChannelId);
         if (!logChannel) return;
 
         const embed = new EmbedBuilder()
@@ -77,7 +86,7 @@ export function setupLoggerEvents(client: Client) {
                 iconURL: member.user.displayAvatarURL()
             })
             .setColor(0x00FF00)
-            .setDescription(`<@${member.id}> ${member.user.tag}`)
+            .setDescription(`<@${member.id}> ${member.user.username}`)
             .addFields(
                 { name: 'Account Created', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>` },
                 { name: 'Member Count', value: `${member.guild.memberCount}` }
@@ -91,7 +100,7 @@ export function setupLoggerEvents(client: Client) {
         const settings = await getGuildSettings(member.guild.id);
         if (!settings.logChannelId || !settings.logMembers) return;
 
-        const logChannel = member.guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(member.guild, settings.logChannelId);
         if (!logChannel) return;
 
         const joinedAt = member.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'Unknown';
@@ -102,7 +111,7 @@ export function setupLoggerEvents(client: Client) {
                 iconURL: member.user?.displayAvatarURL() || undefined
             })
             .setColor(0xFF0000)
-            .setDescription(`<@${member.id}> ${member.user?.tag || 'Unknown User'}`)
+            .setDescription(`<@${member.id}> ${member.user?.username || 'Unknown User'}`)
             .addFields(
                 { name: 'Joined Server', value: joinedAt }
             )
@@ -115,7 +124,7 @@ export function setupLoggerEvents(client: Client) {
         const settings = await getGuildSettings(newMember.guild.id);
         if (!settings.logChannelId || !settings.logMembers) return;
 
-        const logChannel = newMember.guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(newMember.guild, settings.logChannelId);
         if (!logChannel) return;
 
         // Check for role changes
@@ -128,7 +137,7 @@ export function setupLoggerEvents(client: Client) {
             if (removedRoles.size > 0) desc += `**Removed:** ${removedRoles.map(r => `<@&${r.id}>`).join(', ')}`;
 
             const embed = new EmbedBuilder()
-                .setAuthor({ name: newMember.user.tag, iconURL: newMember.user.displayAvatarURL() })
+                .setAuthor({ name: newMember.user.username, iconURL: newMember.user.displayAvatarURL() })
                 .setColor(0x0000FF)
                 .setDescription(desc)
                 .setTimestamp();
@@ -139,16 +148,17 @@ export function setupLoggerEvents(client: Client) {
 
     client.on('channelCreate', async (channel: Channel) => {
         if (!('guild' in channel)) return;
-        const guild = (channel as any).guild;
+        const guildChannel = channel as GuildChannel;
+        const guild = guildChannel.guild;
         const settings = await getGuildSettings(guild.id);
         if (!settings.logChannelId) return;
 
-        const logChannel = guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(guild, settings.logChannelId);
         if (!logChannel) return;
 
         const embed = new EmbedBuilder()
             .setColor(0x00FF00)
-            .setDescription(`**Channel Created:** <#${channel.id}> (${(channel as any).name})`)
+            .setDescription(`**Channel Created:** <#${channel.id}> (${guildChannel.name})`)
             .setTimestamp();
 
         logChannel.send({ embeds: [embed] }).catch(() => null);
@@ -156,16 +166,17 @@ export function setupLoggerEvents(client: Client) {
 
     client.on('channelDelete', async (channel: Channel) => {
         if (!('guild' in channel)) return;
-        const guild = (channel as any).guild;
+        const guildChannel = channel as GuildChannel;
+        const guild = guildChannel.guild;
         const settings = await getGuildSettings(guild.id);
         if (!settings.logChannelId) return;
 
-        const logChannel = guild.channels.cache.get(settings.logChannelId) as any;
+        const logChannel = getLogChannel(guild, settings.logChannelId);
         if (!logChannel) return;
 
         const embed = new EmbedBuilder()
             .setColor(0xFF0000)
-            .setDescription(`**Channel Deleted:** ${(channel as any).name}`)
+            .setDescription(`**Channel Deleted:** ${guildChannel.name}`)
             .setTimestamp();
 
         logChannel.send({ embeds: [embed] }).catch(() => null);

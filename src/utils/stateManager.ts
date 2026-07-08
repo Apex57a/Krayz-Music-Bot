@@ -15,12 +15,23 @@ interface SavedState {
     queue: any[];
 }
 
+interface SavedStates {
+    kazA: SavedState[];
+    kazB: SavedState[];
+}
+
+function isValidSavedStates(data: unknown): data is SavedStates {
+    if (!data || typeof data !== 'object') return false;
+    const obj = data as Record<string, unknown>;
+    return Array.isArray(obj.kazA) && Array.isArray(obj.kazB);
+}
+
 /**
  * Serialize the queues and current playback positions of both bots to disk.
  */
 export function saveStateOnExit(kazA: any, kazB: any) {
     try {
-        const states: { kazA: SavedState[], kazB: SavedState[] } = {
+        const states: SavedStates = {
             kazA: [],
             kazB: []
         };
@@ -57,8 +68,9 @@ export function saveStateOnExit(kazA: any, kazB: any) {
 
         fs.writeFileSync(STATE_FILE, JSON.stringify(states, null, 2), 'utf-8');
         logger.info('system', 'Saved player states to disk.');
-    } catch (err: any) {
-        logger.error('system', `Failed to save state on exit: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('system', `Failed to save state on exit: ${message}`);
     }
 }
 
@@ -70,7 +82,13 @@ export async function restoreStateOnStartup(kazA: any, kazB: any) {
 
     try {
         const data = fs.readFileSync(STATE_FILE, 'utf-8');
-        const states = JSON.parse(data);
+        const states: unknown = JSON.parse(data);
+
+        if (!isValidSavedStates(states)) {
+            logger.warn('system', 'State backup file has invalid structure — skipping restore.');
+            try { fs.unlinkSync(STATE_FILE); } catch {}
+            return;
+        }
 
         // Restore KazA
         if (kazA && states.kazA) {
@@ -86,15 +104,27 @@ export async function restoreStateOnStartup(kazA: any, kazB: any) {
             }
         }
 
-        fs.unlinkSync(STATE_FILE); // Delete the state file after successful restoration
+        // Delete the state file after successful restoration
+        try {
+            fs.unlinkSync(STATE_FILE);
+        } catch (_err) {
+            logger.warn('system', 'Could not delete state backup file after restore.');
+        }
+
         logger.info('system', 'Successfully restored player states from disk.');
-    } catch (err: any) {
-        logger.error('system', `Failed to restore state on startup: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('system', `Failed to restore state on startup: ${message}`);
     }
 }
 
 async function restorePlayer(kazagumo: any, state: SavedState) {
     try {
+        if (!state.guildId || !state.voiceId || !state.textId) {
+            logger.warn('system', `Skipping restore for invalid state entry (missing required fields).`);
+            return;
+        }
+
         const player = await kazagumo.createPlayer({
             guildId: state.guildId,
             voiceId: state.voiceId,
@@ -118,7 +148,8 @@ async function restorePlayer(kazagumo: any, state: SavedState) {
                 player.seek(state.currentPosition);
             }
         }
-    } catch (err: any) {
-        logger.error('system', `Could not restore player for guild ${state.guildId}: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('system', `Could not restore player for guild ${state.guildId}: ${message}`);
     }
 }

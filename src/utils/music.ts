@@ -28,7 +28,7 @@ function safeRequester(user: User): { id: string; username: string; avatar: stri
 
 interface MusicResponse {
     embeds?: EmbedBuilder[];
-    content?: string | null;
+    content?: string;
 }
 
 async function sendResponse(
@@ -48,7 +48,7 @@ async function sendResponse(
             if (deferred) {
                 return await interaction.editReply(data);
             } else {
-                return await interaction.reply({ ...data, ephemeral });
+                return await interaction.reply({ ...data, ...(ephemeral ? { flags: 64 } : {}) });
             }
         } else {
             const message = context as Message;

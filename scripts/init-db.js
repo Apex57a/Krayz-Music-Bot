@@ -20,7 +20,8 @@ async function testConnection() {
             port,
             user,
             password,
-            database
+            database,
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true, minVersion: 'TLSv1.2' } : undefined,
         });
         await connection.ping();
         await connection.end();

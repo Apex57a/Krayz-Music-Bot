@@ -1,5 +1,4 @@
-import { Client, Events, REST, Routes, ActivityType } from 'discord.js';
-import { config } from '../../config';
+import { Client, Events, ActivityType } from 'discord.js';
 import { logger } from '../../utils/logger';
 
 export default {
@@ -48,31 +47,8 @@ export default {
             statusIndex = (statusIndex + 1) % dynamicStatuses.length;
         }, 30_000);
 
-        // --- Register slash commands ---
-        const rest = new REST({ version: '10' }).setToken(config.token);
-        const commands = client.commands.filter((cmd) => cmd.data).map((cmd) => cmd.data.toJSON());
-
-        try {
-            logger.info('commands', `Registering ${commands.length} slash command(s)...`);
-
-            // Always register commands globally
-            logger.info('commands', 'Registering commands GLOBALLY...');
-            await rest.put(
-                Routes.applicationCommands(config.clientId),
-                { body: commands },
-            );
-
-            // Clear guild-specific commands from ALL guilds to avoid duplication
-            logger.info('commands', 'Clearing any leftover guild-specific commands to prevent duplication...');
-            for (const guild of client.guilds.cache.values()) {
-                await rest.put(
-                    Routes.applicationGuildCommands(config.clientId, guild.id),
-                    { body: [] },
-                ).catch(() => {});
-            }
-            logger.info('commands', `All slash commands registered successfully.`);
-        } catch (error: any) {
-            logger.error('commands', `Failed to register slash commands: ${error.message}`);
-        }
+        // Slash commands are now registered exclusively via commandHandler.ts
+        // when DEPLOY_COMMANDS=true. No duplicate registration on every boot.
+        logger.info('commands', 'Slash command registration is handled by commandHandler.ts (set DEPLOY_COMMANDS=true to register).');
     },
 };

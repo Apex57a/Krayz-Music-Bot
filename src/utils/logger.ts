@@ -33,6 +33,12 @@ export const logger = {
     error: (module: string, message: string) => {
         pinoLogger.error({ module }, message);
     },
+    debug: (module: string, message: string) => {
+        pinoLogger.debug({ module }, message);
+    },
+    fatal: (module: string, message: string) => {
+        pinoLogger.fatal({ module }, message);
+    },
     system: (module: string, message: string) => {
         pinoLogger.info({ module, system: true }, message);
     },

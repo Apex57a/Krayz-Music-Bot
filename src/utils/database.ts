@@ -30,6 +30,7 @@ async function initializeDatabase() {
                     djRoleId VARCHAR(191),
                     textChannelId VARCHAR(191),
                     voiceChannelId VARCHAR(191),
+                    volume INT DEFAULT 100,
                     approved TINYINT(1) DEFAULT 0,
                     logChannelId VARCHAR(191),
                     logMessages TINYINT(1) DEFAULT 0,
@@ -45,21 +46,25 @@ async function initializeDatabase() {
                 'ALTER TABLE GuildSettings ADD COLUMN logChannelId VARCHAR(191);',
                 'ALTER TABLE GuildSettings ADD COLUMN logMessages TINYINT(1) DEFAULT 0;',
                 'ALTER TABLE GuildSettings ADD COLUMN logMembers TINYINT(1) DEFAULT 0;',
-                'ALTER TABLE GuildSettings ADD COLUMN maintenance TINYINT(1) DEFAULT 0;'
+                'ALTER TABLE GuildSettings ADD COLUMN maintenance TINYINT(1) DEFAULT 0;',
+                'ALTER TABLE GuildSettings ADD COLUMN volume INT DEFAULT 100;'
             ];
 
             for (const query of alterColumns) {
                 try {
                     await connection.query(query);
-                } catch (err: any) {}
+                } catch (_err: unknown) {
+                    // Column already exists — expected for existing databases
+                }
             }
 
             logger.info('database', 'Table schemas verified successfully.');
         } finally {
             connection.release();
         }
-    } catch (err: any) {
-        logger.error('database', `Failed to initialize database tables: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('database', `Failed to initialize database tables: ${message}`);
     }
 }
 
@@ -76,11 +81,13 @@ export async function preloadGuildSettings() {
                 logMessages: !!g.logMessages,
                 logMembers: !!g.logMembers,
                 maintenance: !!g.maintenance,
+                volume: g.volume ?? 100,
             });
         }
         logger.info('database', `Preloaded ${rows.length} guild settings into cache.`);
-    } catch (e: any) {
-        logger.error('database', `Failed to preload guild settings: ${e.message}`);
+    } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        logger.error('database', `Failed to preload guild settings: ${message}`);
     }
 }
 
@@ -99,6 +106,7 @@ export async function getGuildSettings(guildId: string) {
                 logMessages: !!rows[0].logMessages,
                 logMembers: !!rows[0].logMembers,
                 maintenance: !!rows[0].maintenance,
+                volume: rows[0].volume ?? 100,
             };
             settingsCache.set(guildId, settings);
             return settings;
@@ -110,6 +118,7 @@ export async function getGuildSettings(guildId: string) {
             djRoleId: null,
             textChannelId: null,
             voiceChannelId: null,
+            volume: 100,
             approved: false,
             logChannelId: null,
             logMessages: false,
@@ -118,14 +127,15 @@ export async function getGuildSettings(guildId: string) {
         };
 
         await pool.execute(
-            'INSERT IGNORE INTO GuildSettings (guildId, twentyFourSeven, approved, logMessages, logMembers, maintenance) VALUES (?, ?, ?, ?, ?, ?)',
-            [guildId, 0, 0, 0, 0, 0]
+            'INSERT IGNORE INTO GuildSettings (guildId, twentyFourSeven, volume, approved, logMessages, logMembers, maintenance) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [guildId, 0, 100, 0, 0, 0, 0]
         );
 
         settingsCache.set(guildId, defaultSettings);
         return defaultSettings;
-    } catch (err: any) {
-        logger.error('database', `Error fetching settings for guild ${guildId}: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('database', `Error fetching settings for guild ${guildId}: ${message}`);
         throw err;
     }
 }
@@ -137,6 +147,7 @@ export async function updateGuildSettings(
         djRoleId?: string | null;
         textChannelId?: string | null;
         voiceChannelId?: string | null;
+        volume?: number;
         approved?: boolean;
         logChannelId?: string | null;
         logMessages?: boolean;
@@ -149,18 +160,20 @@ export async function updateGuildSettings(
         const merged = { ...current, ...data };
 
         await pool.execute(
-            `INSERT INTO GuildSettings (guildId, twentyFourSeven, djRoleId, textChannelId, voiceChannelId, approved, logChannelId, logMessages, logMembers, maintenance, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))
+            `INSERT INTO GuildSettings (guildId, twentyFourSeven, djRoleId, textChannelId, voiceChannelId, volume, approved, logChannelId, logMessages, logMembers, maintenance, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))
+             AS new_row
              ON DUPLICATE KEY UPDATE 
-                twentyFourSeven = VALUES(twentyFourSeven),
-                djRoleId = VALUES(djRoleId),
-                textChannelId = VALUES(textChannelId),
-                voiceChannelId = VALUES(voiceChannelId),
-                approved = VALUES(approved),
-                logChannelId = VALUES(logChannelId),
-                logMessages = VALUES(logMessages),
-                logMembers = VALUES(logMembers),
-                maintenance = VALUES(maintenance),
+                twentyFourSeven = new_row.twentyFourSeven,
+                djRoleId = new_row.djRoleId,
+                textChannelId = new_row.textChannelId,
+                voiceChannelId = new_row.voiceChannelId,
+                volume = new_row.volume,
+                approved = new_row.approved,
+                logChannelId = new_row.logChannelId,
+                logMessages = new_row.logMessages,
+                logMembers = new_row.logMembers,
+                maintenance = new_row.maintenance,
                 updatedAt = NOW(3)`,
             [
                 guildId,
@@ -168,6 +181,7 @@ export async function updateGuildSettings(
                 merged.djRoleId,
                 merged.textChannelId,
                 merged.voiceChannelId,
+                merged.volume ?? 100,
                 merged.approved ? 1 : 0,
                 merged.logChannelId,
                 merged.logMessages ? 1 : 0,
@@ -178,8 +192,9 @@ export async function updateGuildSettings(
 
         settingsCache.set(guildId, merged);
         return merged;
-    } catch (err: any) {
-        logger.error('database', `Error updating settings for guild ${guildId}: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('database', `Error updating settings for guild ${guildId}: ${message}`);
         throw err;
     }
 }
@@ -190,8 +205,9 @@ export async function getAll247Guilds() {
             'SELECT guildId, textChannelId, voiceChannelId FROM GuildSettings WHERE twentyFourSeven = 1'
         );
         return rows;
-    } catch (err: any) {
-        logger.error('database', `Error fetching 24/7 guilds: ${err.message}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('database', `Error fetching 24/7 guilds: ${message}`);
         return [];
     }
 }

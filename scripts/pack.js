@@ -20,7 +20,6 @@ const filesToPack = [
     'ecosystem.config.js',
     '.env',
     'index.js',
-    'lavalink'
 ];
 
 console.log("Packing files for production deployment:", filesToPack);

@@ -1,14 +1,18 @@
 # Krayz Music License
 
-I chose the MIT License for this project because it is extremely permissive. You are free to take this code, run it on your own hardware, tear out the dual-bot routing logic for your own projects, or fork it to build something entirely new. 
+This project uses the MIT License, which is about as permissive as software licenses get. You can fork it, modify it, deploy it on your own hardware, rip out individual modules for your own projects, or rebuild the whole thing from scratch using this as a reference. The license does not restrict commercial use either, so if you somehow figure out how to make money from a Discord music bot in 2026, go for it.
 
-The only strict requirement is that you leave the original copyright and permission notice intact in your copies. Also, keep in mind that I provide this software exactly "as is." If you deploy this code and it accidentally wipes your database, leaks memory, or gets your Discord tokens banned, I am not liable for the damages. 
+There is one condition, and it is not optional: you must keep the original copyright notice and permission text intact in any copy or substantial portion of the code. This is not a suggestion. The MIT License explicitly requires it, and the project's attribution policy (documented in the README) requires visible credit to the original author, Derek, in any fork or deployment.
+
+The "as is" clause at the bottom means exactly what it says. If you deploy this code and something goes wrong (your database gets corrupted, your Discord tokens get rate-limited into oblivion, your Lavalink server catches fire, or your hosting provider sends you an angry email about CPU usage), that is your problem. The authors and copyright holders are not liable for any damages, whether you are running this on a dedicated server or a Raspberry Pi taped to your router.
+
+If you are not sure what the MIT License allows, the short version is: you can do almost anything with this code as long as you include the license text. The long version is below.
 
 ---
 
 MIT License
 
-Copyright (c) 2026 Krayz Music
+Copyright (c) 2025-2026 Derek, Krayz Music Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

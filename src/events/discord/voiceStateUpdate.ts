@@ -2,6 +2,9 @@ import { Client, Events, VoiceState } from 'discord.js';
 import { twentyFourSevenGuilds } from '../../commands/247';
 import { logger } from '../../utils/logger';
 
+// Keys that should not be copied during session restore (timer refs, stale controllers)
+const EXCLUDED_DATA_KEYS = new Set(['leaveTimeout', 'hydrationController', 'intentionalDisconnect']);
+
 export default {
     name: Events.VoiceStateUpdate,
     once: false,
@@ -73,7 +76,14 @@ export default {
                 const position = existingPlayer.position || 0;
                 const wasPlaying = existingPlayer.playing || false;
                 const wasPaused = existingPlayer.paused || false;
-                const customData = new Map(existingPlayer.data);
+
+                // Copy custom data, filtering out timer references and stale controllers
+                const customData = new Map<string, any>();
+                for (const [key, val] of existingPlayer.data.entries()) {
+                    if (!EXCLUDED_DATA_KEYS.has(key)) {
+                        customData.set(key, val);
+                    }
+                }
 
                 // Destroy old player IMMEDIATELY so Shoukaku cleans up the old connection
                 try { existingPlayer.destroy(); } catch {}
@@ -97,7 +107,7 @@ export default {
                         // Restore loop mode
                         player.setLoop(loopMode);
 
-                        // Restore custom data
+                        // Restore custom data (safe — timer refs already filtered out)
                         for (const [key, val] of customData.entries()) {
                             player.data.set(key, val);
                         }
@@ -118,8 +128,9 @@ export default {
                             await player.play(currentTrack, { position, paused: true });
                             logger.info('music', `Resumed paused state at ${position}ms`);
                         }
-                    } catch (err: any) {
-                        logger.error('music', `Failed to restore session in ${guildId}: ${err.message}`);
+                    } catch (err: unknown) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        logger.error('music', `Failed to restore session in ${guildId}: ${message}`);
                     }
                 }, 2000);
             }

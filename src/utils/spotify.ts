@@ -2,6 +2,11 @@
 // The official API blocks track data for client-credentials on most playlists.
 // The embed page always includes track data in __NEXT_DATA__.
 
+import { config } from '../config';
+import { logger } from './logger';
+
+const FETCH_TIMEOUT_MS = 15_000;
+
 export interface SpotifyTrackInfo {
     name: string;
     artist: string;
@@ -28,17 +33,18 @@ async function scrapeEmbedTracks(type: string, id: string): Promise<SpotifyTrack
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     if (!res.ok) {
-        console.error(`[SPOTIFY] Embed fetch failed: ${res.status}`);
+        logger.error('spotify', `Embed fetch failed: ${res.status}`);
         return [];
     }
 
     const html = await res.text();
     const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/);
     if (!match) {
-        console.error('[SPOTIFY] No __NEXT_DATA__ found in embed page');
+        logger.error('spotify', 'No __NEXT_DATA__ found in embed page');
         return [];
     }
 
@@ -47,7 +53,7 @@ async function scrapeEmbedTracks(type: string, id: string): Promise<SpotifyTrack
         const entity = data?.props?.pageProps?.state?.data?.entity;
 
         if (!entity) {
-            console.error('[SPOTIFY] No entity found in embed data');
+            logger.error('spotify', 'No entity found in embed data');
             return [];
         }
 
@@ -67,7 +73,7 @@ async function scrapeEmbedTracks(type: string, id: string): Promise<SpotifyTrack
             return { name, artist, searchQuery: `${name} ${artist}` };
         });
     } catch (err) {
-        console.error('[SPOTIFY] Failed to parse embed data:', err);
+        logger.error('spotify', `Failed to parse embed data: ${err instanceof Error ? err.message : String(err)}`);
         return [];
     }
 }
@@ -80,8 +86,6 @@ interface SpotifyToken {
 }
 
 let cachedToken: SpotifyToken | null = null;
-
-import { config } from '../config';
 
 const SPOTIFY_CLIENT_ID = config.spotify.clientId;
 const SPOTIFY_CLIENT_SECRET = config.spotify.clientSecret;
@@ -98,6 +102,7 @@ export async function getSpotifyToken(): Promise<string> {
             Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64')}`,
         },
         body: 'grant_type=client_credentials',
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     if (!response.ok) throw new Error(`Spotify token error: ${response.status}`);
@@ -116,7 +121,10 @@ async function apiFallback(type: string, id: string): Promise<SpotifyTrackInfo[]
         const headers = { Authorization: `Bearer ${token}` };
 
         if (type === 'track') {
-            const res = await fetch(`https://api.spotify.com/v1/tracks/${id}?market=US`, { headers });
+            const res = await fetch(`https://api.spotify.com/v1/tracks/${id}?market=US`, {
+                headers,
+                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            });
             if (!res.ok) return [];
             const track = await res.json() as any;
             const artist = track.artists?.map((a: any) => a.name).join(', ') || 'Unknown';
@@ -128,7 +136,10 @@ async function apiFallback(type: string, id: string): Promise<SpotifyTrackInfo[]
             ? `https://api.spotify.com/v1/playlists/${id}?market=US`
             : `https://api.spotify.com/v1/albums/${id}?market=US`;
 
-        const res = await fetch(endpoint, { headers });
+        const res = await fetch(endpoint, {
+            headers,
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
         if (!res.ok) return [];
         const data = await res.json() as any;
 
@@ -140,7 +151,7 @@ async function apiFallback(type: string, id: string): Promise<SpotifyTrackInfo[]
             return { name, artist, searchQuery: `${name} ${artist}` };
         }).filter((t: SpotifyTrackInfo) => t.name !== 'Unknown');
     } catch (err) {
-        console.error('[SPOTIFY] API fallback failed:', err);
+        logger.error('spotify', `API fallback failed: ${err instanceof Error ? err.message : String(err)}`);
         return [];
     }
 }
@@ -150,18 +161,18 @@ export async function fetchSpotifyTracks(url: string): Promise<SpotifyTrackInfo[
     if (!parsed) return [];
 
     // Primary: scrape embed page (works for everything)
-    console.log(`[SPOTIFY] Fetching ${parsed.type}/${parsed.id} via embed scrape...`);
+    logger.info('spotify', `Fetching ${parsed.type}/${parsed.id} via embed scrape...`);
     let tracks = await scrapeEmbedTracks(parsed.type, parsed.id);
 
     if (tracks.length > 0) {
-        console.log(`[SPOTIFY] Got ${tracks.length} tracks from embed`);
+        logger.info('spotify', `Got ${tracks.length} tracks from embed`);
         return tracks;
     }
 
     // Fallback: official API (may 403 for playlists)
-    console.log(`[SPOTIFY] Embed failed, trying API fallback...`);
+    logger.info('spotify', `Embed failed, trying API fallback...`);
     tracks = await apiFallback(parsed.type, parsed.id);
-    console.log(`[SPOTIFY] API fallback got ${tracks.length} tracks`);
+    logger.info('spotify', `API fallback got ${tracks.length} tracks`);
     return tracks;
 }
 
@@ -169,13 +180,14 @@ export async function resolveSpotifyId(query: string): Promise<string | null> {
     try {
         const token = await getSpotifyToken();
         const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1&market=US`, {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) return null;
         const data = await res.json() as any;
         if (data.tracks?.items?.length > 0) {
             return data.tracks.items[0].id;
         }
-    } catch (e) {}
+    } catch (_e) {}
     return null;
 }

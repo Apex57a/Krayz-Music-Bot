@@ -6,6 +6,16 @@ import { isMaintenance } from '../../utils/maintenance';
 
 const cooldowns = new Map<string, number>();
 
+// Sweep stale cooldown entries every 60 seconds
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, timestamp] of cooldowns) {
+        if (now - timestamp > 10_000) {
+            cooldowns.delete(userId);
+        }
+    }
+}, 60_000);
+
 export default {
     name: Events.MessageCreate,
     once: false,
@@ -67,13 +77,14 @@ export default {
                 if (msg) setTimeout(() => msg.delete().catch(() => {}), 10_000);
                 return;
             }
-        } catch (err: any) {
-            logger.error('security', `Guild approval/maintenance settings fetch failed: ${err.message}`);
+        } catch (err: unknown) {
+            const message2 = err instanceof Error ? err.message : String(err);
+            logger.error('security', `Guild approval/maintenance settings fetch failed: ${message2}`);
         }
 
         try {
             if (cmd.executePrefix) {
-                logger.info('discord', `Executing prefix command "${commandName}" by ${message.author.tag} in guild ${message.guild.id}`);
+                logger.info('discord', `Executing prefix command "${commandName}" by ${message.author.username} in guild ${message.guild.id}`);
                 await cmd.executePrefix(message, args, client);
             } else {
                 const embed = new EmbedBuilder()
@@ -82,8 +93,9 @@ export default {
                 const msg = await message.reply({ embeds: [embed] }).catch(() => null);
                 if (msg) setTimeout(() => msg.delete().catch(() => {}), 10_000);
             }
-        } catch (error: any) {
-            logger.error('discord', `Error executing prefix command "${commandName}": ${error.stack || error.message}`);
+        } catch (error: unknown) {
+            const errMsg = error instanceof Error ? (error.stack || error.message) : String(error);
+            logger.error('discord', `Error executing prefix command "${commandName}": ${errMsg}`);
             message.reply('There was an error trying to execute that command.').catch(() => {});
         }
     },

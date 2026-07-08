@@ -11,6 +11,16 @@ const DJ_COMMANDS = new Set([
 
 const cooldowns = new Map<string, number>();
 
+// Sweep stale cooldown entries every 60 seconds
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, timestamp] of cooldowns) {
+        if (now - timestamp > 10_000) {
+            cooldowns.delete(userId);
+        }
+    }
+}, 60_000);
+
 export default {
     name: Events.InteractionCreate,
     once: false,
@@ -37,8 +47,9 @@ export default {
                         .setDescription('The bot is currently undergoing maintenance in this server or globally. Please check back later.');
                     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                 }
-            } catch (err: any) {
-                logger.error('security', `Guild approval/maintenance settings fetch failed: ${err.message}`);
+            } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                logger.error('security', `Guild approval/maintenance settings fetch failed: ${message}`);
             }
         }
 
@@ -68,15 +79,17 @@ export default {
                         .setDescription(`You need the <@&${settings.djRoleId}> role (or DJ privileges) to use this command.`);
                     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                 }
-            } catch (err: any) {
-                logger.error('security', `DJ role check failed: ${err.message}`);
+            } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err);
+                logger.error('security', `DJ role check failed: ${message}`);
             }
         }
 
         try {
             await command.execute(interaction, client);
-        } catch (error: any) {
-            logger.error('discord', `Error executing /${interaction.commandName}: ${error.message}`);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.error('discord', `Error executing /${interaction.commandName}: ${message}`);
             const embed = new EmbedBuilder()
                 .setColor(0x111111)
                 .setDescription('Something went wrong while executing this command.');

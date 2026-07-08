@@ -1,9 +1,12 @@
-import fetch from 'node-fetch';
+import { Client, Collection, GatewayIntentBits, Partials, Options } from 'discord.js';
+import { Kazagumo } from 'kazagumo';
+import { Connectors } from 'shoukaku';
+
+// Polyfill global fetch with node-fetch for hosting compatibility
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const fetch = require('node-fetch');
 (global as any).fetch = fetch;
 
-import { Client, Collection, GatewayIntentBits, Partials } from 'discord.js';
-import { Kazagumo, Plugins } from 'kazagumo';
-import { Connectors } from 'shoukaku';
 import { loadEvents } from './handlers/eventHandler';
 import { loadCommands } from './handlers/commandHandler';
 import { config } from './config';
@@ -21,11 +24,12 @@ for (const key of required) {
     }
 }
 
-process.on('unhandledRejection', (error: any) => {
-    logger.error('system', `Unhandled rejection: ${error?.stack || error}`);
+process.on('unhandledRejection', (error: unknown) => {
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    logger.error('system', `Unhandled rejection: ${message}`);
 });
-process.on('uncaughtException', (error: any) => {
-    logger.error('system', `Uncaught exception: ${error?.stack || error}`);
+process.on('uncaughtException', (error: Error) => {
+    logger.error('system', `Uncaught exception: ${error.stack || error.message}`);
 });
 
 declare module 'discord.js' {
@@ -42,13 +46,23 @@ const clientA = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildModeration,
     ],
     partials: [
         Partials.Message,
         Partials.Channel,
-        Partials.GuildMember,
     ],
+    sweepers: {
+        messages: { interval: 300, lifetime: 600 },
+    },
+    makeCache: Options.cacheWithLimits({
+        MessageManager: 50,
+        PresenceManager: 0,
+        ReactionManager: 0,
+        GuildMemberManager: {
+            maxSize: 50,
+            keepOverLimit: (member) => member.id === member.client.user?.id,
+        },
+    }),
 });
 
 let clientB: Client | null = null;
@@ -58,6 +72,18 @@ if (process.env.WORKER_TOKEN) {
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildVoiceStates,
         ],
+        sweepers: {
+            messages: { interval: 300, lifetime: 600 },
+        },
+        makeCache: Options.cacheWithLimits({
+            MessageManager: 0,
+            PresenceManager: 0,
+            ReactionManager: 0,
+            GuildMemberManager: {
+                maxSize: 10,
+                keepOverLimit: (member) => member.id === member.client.user?.id,
+            },
+        }),
     });
 }
 
@@ -158,8 +184,9 @@ process.on('SIGUSR2', shutdown); // Nodemon restart
         }, 3000); // Wait 3 seconds for Lavalink nodes to be fully ready before restoring
 
         await load247FromDB(clientA);
-    } catch (err: any) {
-        logger.error('system', `Failed to start: ${err.message || err}`);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('system', `Failed to start: ${message}`);
         process.exit(1);
     }
 })();

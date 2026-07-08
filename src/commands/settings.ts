@@ -11,6 +11,7 @@ import {
 } from 'discord.js';
 import { getGuildSettings, updateGuildSettings } from '../utils/database';
 import { isDJ } from '../utils/security';
+import { twentyFourSevenGuilds } from './247';
 
 export default {
     data: new SlashCommandBuilder()
@@ -28,7 +29,7 @@ export default {
             return interaction.reply({ content: 'You do not have permission to manage settings.', flags: MessageFlags.Ephemeral });
         }
 
-        await handleSettingsMenu(interaction, interaction.guild.id);
+        await handleSettingsMenu(interaction, interaction.guild.id, client);
     },
 
     async executePrefix(message: Message, args: string[], client: Client) {
@@ -40,11 +41,11 @@ export default {
             return;
         }
 
-        await handleSettingsMenu(message, message.guild.id);
+        await handleSettingsMenu(message, message.guild.id, client);
     }
 };
 
-async function handleSettingsMenu(context: ChatInputCommandInteraction | Message, guildId: string) {
+async function handleSettingsMenu(context: ChatInputCommandInteraction | Message, guildId: string, client: Client) {
     const settings = await getGuildSettings(guildId);
     
     const embed = new EmbedBuilder()
@@ -101,8 +102,17 @@ async function handleSettingsMenu(context: ChatInputCommandInteraction | Message
             updateData.logMembers = !currentSettings.logMembers;
             feedback = `Member logging ${updateData.logMembers ? 'enabled' : 'disabled'}.`;
         } else if (choice === 'toggle_247') {
-            updateData.twentyFourSeven = !currentSettings.twentyFourSeven;
-            feedback = `24/7 mode ${updateData.twentyFourSeven ? 'enabled' : 'disabled'}.`;
+            const newState = !currentSettings.twentyFourSeven;
+            updateData.twentyFourSeven = newState;
+
+            // Sync the in-memory Set so the bot actually stays/leaves
+            if (newState) {
+                twentyFourSevenGuilds.add(guildId);
+            } else {
+                twentyFourSevenGuilds.delete(guildId);
+            }
+
+            feedback = `24/7 mode ${newState ? 'enabled' : 'disabled'}.`;
         }
 
         await updateGuildSettings(guildId, updateData);

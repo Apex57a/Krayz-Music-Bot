@@ -18,9 +18,8 @@ lavalink:
       vimeo: true
       http: true
       local: false
-    # Premium-Grade Audio Pipeline Tuning (Increased for shared hosting jitter)
     bufferDurationMs: 10000
-    frameBufferDurationMs: 30000
+    frameBufferDurationMs: 10000
     youtubePlaylistLoadLimit: 20
     playerUpdateInterval: 3000
     youtubeSearchEnabled: true
@@ -28,6 +27,8 @@ lavalink:
     gc-warnings: false
     opusEncodingQuality: 10
     resamplingQuality: HIGH
+    filters:
+      volume: true
     koe:
       highPacketPriority: false
       byteBufAllocator: "pooled"
@@ -46,7 +47,7 @@ plugins:
       - TV
     oauth:
       enabled: true
-      refreshToken: "${YOUTUBE_OAUTH_REFRESH_TOKEN:1//0gpOvtzdzUy6JCgYIARAAGBASNwF-L9Irhp4k9jRoTHD6P-6_gByluD1LyoXW9WW8r6dWlhiQqH0AJCgdj46cYM3ZZU-EidvvJMU}"
+      refreshToken: "${YOUTUBE_OAUTH_REFRESH_TOKEN:your_youtube_oauth_refresh_token_here}"
   lavasrc:
     providers:
       - "scsearch:%QUERY%"
@@ -61,16 +62,16 @@ plugins:
       flowerytts: false
       youtube: false
     spotify:
-      clientId: "${SPOTIFY_CLIENT_ID:efbe6b1342a9495286859a5d0e9bb953}"
-      clientSecret: "${SPOTIFY_CLIENT_SECRET:1d1f7d9229b545b298f02e0ac1538a8d}"
+      clientId: "${SPOTIFY_CLIENT_ID:your_spotify_client_id_here}"
+      clientSecret: "${SPOTIFY_CLIENT_SECRET:your_spotify_client_secret_here}"
       countryCode: "IN"
       playlistLoadLimit: 6
       albumLoadLimit: 6
 
 logging:
   file:
-    max-history: 30
-    max-size: 1GB
+    max-history: 7
+    max-size: 100MB
   path: ./logs/
 
   level:
