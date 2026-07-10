@@ -9,20 +9,20 @@ const fetch = require('node-fetch');
 
 import { loadEvents } from './handlers/eventHandler';
 import { loadCommands } from './handlers/commandHandler';
-import { config } from './config';
+import { config, validateEnv } from './config';
 import { load247FromDB } from './commands/247';
 import { preloadGuildSettings } from './utils/database';
+import { botPool } from './utils/botPool';
 import { logger } from './utils/logger';
 import { setupLoggerEvents } from './utils/loggerService';
 import { saveStateOnExit, restoreStateOnStartup } from './utils/stateManager';
 
-const required = ['DISCORD_TOKEN', 'CLIENT_ID', 'GUILD_ID'];
-for (const key of required) {
-    if (!process.env[key]) {
-        logger.error('system', `Missing env var: ${key}. Check your .env file.`);
-        process.exit(1);
-    }
+// Validate environment before doing anything else
+if (!validateEnv()) {
+    process.exit(1);
 }
+
+let isShuttingDown = false;
 
 process.on('unhandledRejection', (error: unknown) => {
     const message = error instanceof Error ? error.stack || error.message : String(error);
@@ -39,7 +39,36 @@ declare module 'discord.js' {
     }
 }
 
-const clientA = new Client({
+// ─── Client Factory ───────────────────────────────────────────────────────────
+
+/**
+ * Create a worker client with stripped-down intents and minimal cache.
+ * Workers only need Guilds and GuildVoiceStates to handle audio.
+ */
+function createWorkerClient(): Client {
+    return new Client({
+        intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildVoiceStates,
+        ],
+        sweepers: {
+            messages: { interval: 300, lifetime: 600 },
+        },
+        makeCache: Options.cacheWithLimits({
+            MessageManager: 0,
+            PresenceManager: 0,
+            ReactionManager: 0,
+            GuildMemberManager: {
+                maxSize: 10,
+                keepOverLimit: (member) => member.id === member.client.user?.id,
+            },
+        }),
+    });
+}
+
+// ─── Primary Client ───────────────────────────────────────────────────────────
+
+const primaryClient = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
@@ -65,32 +94,33 @@ const clientA = new Client({
     }),
 });
 
-let clientB: Client | null = null;
-if (process.env.WORKER_TOKEN) {
-    clientB = new Client({
-        intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildVoiceStates,
-        ],
-        sweepers: {
-            messages: { interval: 300, lifetime: 600 },
-        },
-        makeCache: Options.cacheWithLimits({
-            MessageManager: 0,
-            PresenceManager: 0,
-            ReactionManager: 0,
-            GuildMemberManager: {
-                maxSize: 10,
-                keepOverLimit: (member) => member.id === member.client.user?.id,
-            },
-        }),
-    });
+primaryClient.commands = new Collection();
+
+// ─── Worker Clients (driven by .env) ──────────────────────────────────────────
+
+const workerClients: Client[] = [];
+for (const _token of config.workerTokens) {
+    workerClients.push(createWorkerClient());
 }
 
-clientA.commands = new Collection();
+if (workerClients.length > 0) {
+    logger.info('system', `Discovered ${workerClients.length} worker token(s) in .env`);
+} else {
+    logger.info('system', 'No worker tokens found. Running in single-bot mode.');
+}
 
-// Track which client is handling which guild's voice connection (Legacy, kept for compatibility if needed, but not used by Kazagumo internally anymore)
-export const orchestratorAssignments = new Map<string, string>(); 
+/**
+ * Unified array of all clients: [primary, worker1, worker2, ...]
+ * Used by botRouter, stats, own, eventHandler, and stateManager.
+ */
+export const allClients: Client[] = [primaryClient, ...workerClients];
+allClients.forEach(c => botPool.register(c));
+
+// Legacy exports for backwards compatibility
+export const client = primaryClient;
+export const clientB = workerClients.length > 0 ? workerClients[0] : null;
+
+// ─── Lavalink Nodes ───────────────────────────────────────────────────────────
 
 const nodes = [
     {
@@ -107,27 +137,27 @@ const nodes = [
     }] : [])
 ];
 
-const kazagumoA = new Kazagumo({
-    defaultSearchEngine: 'youtube_music',
-    send: (guildId, payload) => {
-        const guild = clientA.guilds.cache.get(guildId);
-        if (guild) guild.shard.send(payload);
-    },
-}, new Connectors.DiscordJS(clientA), nodes);
+// ─── Kazagumo Instances ───────────────────────────────────────────────────────
 
-clientA.kazagumo = kazagumoA;
-
-let kazagumoB: Kazagumo | undefined;
-if (clientB) {
-    kazagumoB = new Kazagumo({
+function createKazagumo(targetClient: Client): Kazagumo {
+    return new Kazagumo({
         defaultSearchEngine: 'youtube_music',
         send: (guildId, payload) => {
-            const guild = clientB!.guilds.cache.get(guildId);
+            const guild = targetClient.guilds.cache.get(guildId);
             if (guild) guild.shard.send(payload);
         },
-    }, new Connectors.DiscordJS(clientB), nodes);
-    clientB.kazagumo = kazagumoB;
+    }, new Connectors.DiscordJS(targetClient), nodes);
 }
+
+// Primary Kazagumo
+primaryClient.kazagumo = createKazagumo(primaryClient);
+
+// Worker Kazagumo instances
+for (const wc of workerClients) {
+    wc.kazagumo = createKazagumo(wc);
+}
+
+// ─── Kazagumo Event Binding ───────────────────────────────────────────────────
 
 function bindKazagumoEvents(kaz: Kazagumo, prefix: string) {
     kaz.shoukaku.on('error', (name, error) => {
@@ -149,46 +179,82 @@ function bindKazagumoEvents(kaz: Kazagumo, prefix: string) {
     });
 }
 
-bindKazagumoEvents(kazagumoA, 'Primary');
-if (kazagumoB) bindKazagumoEvents(kazagumoB, 'Worker');
+bindKazagumoEvents(primaryClient.kazagumo, 'Primary');
+workerClients.forEach((wc, i) => {
+    bindKazagumoEvents(wc.kazagumo, `Worker-${i + 1}`);
+});
 
-// Hook process exit for state preservation
+// ─── Shutdown & State Preservation ────────────────────────────────────────────
+
 function shutdown() {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
     logger.info('system', 'Shutting down... Preserving queues.');
-    saveStateOnExit(kazagumoA, kazagumoB);
+    const allKazagumos = allClients.map(c => c.kazagumo);
+    saveStateOnExit(allKazagumos);
     process.exit(0);
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 process.on('SIGUSR2', shutdown); // Nodemon restart
 
+// ─── Stale Player Cleanup ─────────────────────────────────────────────────────
+
+const STALE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+function cleanupStalePlayers() {
+    for (const c of allClients) {
+        if (!c.kazagumo) continue;
+        for (const [guildId, player] of c.kazagumo.players) {
+            if (!player.voiceId) continue;
+
+            const guild = c.guilds.cache.get(guildId);
+            const botVoiceChannelId = guild?.members.me?.voice.channelId;
+
+            if (!botVoiceChannelId) {
+                logger.warn('system', `Stale player detected in guild ${guildId} (bot not in VC). Destroying.`);
+                player.destroy();
+            }
+        }
+    }
+}
+
+// ─── Boot Sequence ────────────────────────────────────────────────────────────
 
 (async () => {
     try {
         await preloadGuildSettings();
-        await loadCommands(clientA);
-        await loadEvents(clientA);
-        setupLoggerEvents(clientA);
+        await loadCommands(primaryClient);
+        await loadEvents(primaryClient);
+        setupLoggerEvents(primaryClient);
 
-        await clientA.login(config.token);
+        await primaryClient.login(config.token);
         logger.info('system', `Starting Krayz-Music v${config.version}`);
-        logger.info('system', `Primary Bot ${clientA.user?.tag} connected.`);
+        logger.info('system', `Primary Bot ${primaryClient.user?.username} connected.`);
 
-        if (clientB && process.env.WORKER_TOKEN) {
-            await clientB.login(process.env.WORKER_TOKEN);
-            logger.info('system', `Worker Bot ${clientB.user?.tag} connected in standby mode.`);
+        // Login all workers
+        for (let i = 0; i < workerClients.length; i++) {
+            await workerClients[i].login(config.workerTokens[i]);
+            logger.info('system', `Worker-${i + 1} Bot ${workerClients[i].user?.username} connected.`);
         }
 
+        // Wait for Lavalink nodes to be fully ready before restoring state
         setTimeout(() => {
-            restoreStateOnStartup(clientA.kazagumo, clientB?.kazagumo);
-        }, 3000); // Wait 3 seconds for Lavalink nodes to be fully ready before restoring
+            const allKazagumos = allClients.map(c => c.kazagumo);
+            restoreStateOnStartup(allKazagumos);
+        }, 3000);
 
-        await load247FromDB(clientA);
+        await load247FromDB(primaryClient);
+
+        logger.info('system', `Bot pool ready: 1 primary + ${workerClients.length} worker(s) = ${allClients.length} total clients`);
+
+        // Start stale player cleanup after boot
+        setInterval(cleanupStalePlayers, STALE_CLEANUP_INTERVAL_MS);
+        logger.info('system', `Stale player cleanup scheduled every ${STALE_CLEANUP_INTERVAL_MS / 60000} minutes.`);
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error('system', `Failed to start: ${message}`);
         process.exit(1);
     }
 })();
-
-export { clientA as client, clientB };

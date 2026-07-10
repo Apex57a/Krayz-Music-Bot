@@ -1,10 +1,7 @@
-import {
-    SlashCommandBuilder,
-    ChatInputCommandInteraction,
-    Client,
-    Message,
-} from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, Client, Message } from 'discord.js';
 import { skipTrack } from '../utils/music';
+import { CommandContext } from '../utils/context';
+import { withPlayerGuard } from '../utils/middlewares';
 
 export default {
     data: new SlashCommandBuilder()
@@ -13,10 +10,16 @@ export default {
     aliases: ['s'],
 
     async execute(interaction: ChatInputCommandInteraction, client: Client) {
-        await skipTrack(client, interaction, interaction.user, true);
+        const ctx = new CommandContext(interaction, true);
+        await withPlayerGuard(ctx, { requirePlayer: true, useLock: true }, async (player) => {
+            await skipTrack(ctx, player!);
+        });
     },
 
     async executePrefix(message: Message, args: string[], client: Client) {
-        await skipTrack(client, message, message.author, false);
+        const ctx = new CommandContext(message, false);
+        await withPlayerGuard(ctx, { requirePlayer: true, useLock: true }, async (player) => {
+            await skipTrack(ctx, player!);
+        });
     }
 };

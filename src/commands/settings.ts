@@ -25,7 +25,7 @@ export default {
         if (!interaction.guild) return;
 
         // Ensure user has Admin or DJ permissions
-        if (!interaction.memberPermissions?.has('Administrator') && !(await isDJ(interaction.member as any))) {
+        if (!interaction.memberPermissions?.has('Administrator') && !(await isDJ(interaction.member as import('discord.js').GuildMember))) {
             return interaction.reply({ content: 'You do not have permission to manage settings.', flags: MessageFlags.Ephemeral });
         }
 
@@ -35,7 +35,7 @@ export default {
     async executePrefix(message: Message, args: string[], client: Client) {
         if (!message.guild) return;
 
-        if (!message.member?.permissions.has('Administrator') && !(await isDJ(message.member as any))) {
+        if (!message.member?.permissions.has('Administrator') && !(await isDJ(message.member as import('discord.js').GuildMember))) {
             const reply = await message.reply('You do not have permission to manage settings.');
             setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;
@@ -92,7 +92,7 @@ async function handleSettingsMenu(context: ChatInputCommandInteraction | Message
 
         const choice = i.values[0];
         const currentSettings = await getGuildSettings(guildId);
-        let updateData: any = {};
+        let updateData: Record<string, unknown> = {};
         let feedback = '';
 
         if (choice === 'toggle_messages') {

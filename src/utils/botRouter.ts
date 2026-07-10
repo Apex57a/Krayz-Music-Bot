@@ -1,59 +1,53 @@
 import { Client } from 'discord.js';
 import { Kazagumo } from 'kazagumo';
+import { botPool } from './botPool';
 
 /**
- * Smart router to assign a Kazagumo instance and Discord Client based on Voice Channel.
+ * Smart router to assign a Kazagumo instance and Discord Client based on voice channel availability.
+ * Iterates through the entire bot pool (primary + all workers) to find the best match.
+ * Only considers clients that are ready and have at least one connected Shoukaku node.
  */
 export function getAvailableBot(guildId: string, voiceChannelId?: string): { kazagumo: Kazagumo, client: Client } | null {
-    // We import clients dynamically to avoid circular dependencies
-    const { client, clientB } = require('../index');
-    
-    const clientA: Client = client;
-    const kazA: Kazagumo = clientA.kazagumo;
-    const kazB: Kazagumo | undefined = clientB?.kazagumo;
+    const allClients = botPool.getAll();
 
-    // Rule 1: If Bot A is already in THIS voice channel, return Bot A
+    // Filter to only ready clients
+    const clients: Client[] = (allClients as Client[]).filter(c => c.isReady());
+
+    if (clients.length === 0) return null;
+
+    // Rule 1: If a specific voice channel was requested, check if any bot is already there
     if (voiceChannelId) {
-        const playerA = kazA.players.get(guildId);
-        if (playerA && playerA.voiceId === voiceChannelId) {
-            return { kazagumo: kazA, client: clientA };
-        }
-
-        // Rule 2: If Bot B is already in THIS voice channel, return Bot B
-        if (kazB) {
-            const playerB = kazB.players.get(guildId);
-            if (playerB && playerB.voiceId === voiceChannelId) {
-                return { kazagumo: kazB, client: clientB! };
+        for (const c of clients) {
+            const player = c.kazagumo?.players.get(guildId);
+            if (player && player.voiceId === voiceChannelId) {
+                return { kazagumo: c.kazagumo, client: c };
             }
         }
     }
 
-    // If no specific voice channel matches, check for any active player in the guild
-    // This is useful for commands like /skip, /stop that don't pass voiceChannelId initially
+    // Rule 2: If no specific VC, find any bot that already has an active player in this guild
+    // (used by commands like /skip, /stop that don't pass voiceChannelId)
     if (!voiceChannelId) {
-        const playerA = kazA.players.get(guildId);
-        if (playerA) return { kazagumo: kazA, client: clientA };
-
-        if (kazB) {
-            const playerB = kazB.players.get(guildId);
-            if (playerB) return { kazagumo: kazB, client: clientB! };
+        for (const c of clients) {
+            const player = c.kazagumo?.players.get(guildId);
+            if (player) {
+                return { kazagumo: c.kazagumo, client: c };
+            }
         }
     }
 
-    // Rule 3: If creating a NEW player, check if Bot A is entirely free in this guild
-    const playerA = kazA.players.get(guildId);
-    if (!playerA) {
-        return { kazagumo: kazA, client: clientA };
-    }
-
-    // Rule 4: If Bot A is busy in another VC, check if Bot B is entirely free in this guild
-    if (kazB) {
-        const playerB = kazB.players.get(guildId);
-        if (!playerB) {
-            return { kazagumo: kazB, client: clientB! };
+    // Rule 3: Assign the first bot that is completely free in this guild AND has a connected Shoukaku node
+    for (const c of clients) {
+        const player = c.kazagumo?.players.get(guildId);
+        if (!player) {
+            const hasConnectedNode = c.kazagumo.shoukaku.nodes.size > 0
+                && Array.from(c.kazagumo.shoukaku.nodes.values()).some((n: any) => n.state === 1);
+            if (hasConnectedNode) {
+                return { kazagumo: c.kazagumo, client: c };
+            }
         }
     }
 
-    // Rule 5: Both bots are busy in OTHER VCs in this guild!
+    // Rule 4: All bots are occupied or unhealthy
     return null;
 }

@@ -32,11 +32,16 @@ export async function loadEvents(client: Client): Promise<void> {
         const filePath = join(kazagumoEventsPath, file);
         const event = require(filePath).default;
 
+        // Bind kazagumo events to the primary client
         client.kazagumo.on(event.name, (...args: any[]) => event.execute(...args, client));
-        
-        const { clientB } = require('../index');
-        if (clientB && clientB.kazagumo) {
-            clientB.kazagumo.on(event.name, (...args: any[]) => event.execute(...args, clientB));
+
+        // Bind kazagumo events to ALL worker clients
+        const { botPool } = require('../utils/botPool');
+        const workers: Client[] = botPool.getAll().slice(1);
+        for (const worker of workers) {
+            if (worker.kazagumo) {
+                worker.kazagumo.on(event.name, (...args: any[]) => event.execute(...args, worker));
+            }
         }
 
         logger.info('music', `Loaded Kazagumo event: ${event.name}`);

@@ -3,6 +3,8 @@ import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { getGuildSettings } from '../../utils/database';
 import { isMaintenance } from '../../utils/maintenance';
+import { logCommandExecution } from '../../utils/loggerService';
+import type { Command } from '../../types/Command';
 
 const cooldowns = new Map<string, number>();
 
@@ -49,7 +51,7 @@ export default {
         if (!commandName) return;
 
         const cmd = client.commands.get(commandName) || 
-                    client.commands.find((c: any) => c.aliases && c.aliases.includes(commandName));
+                    client.commands.find((c: Command) => c.aliases?.includes(commandName));
 
         if (!cmd) return;
 
@@ -77,6 +79,19 @@ export default {
                 if (msg) setTimeout(() => msg.delete().catch(() => {}), 10_000);
                 return;
             }
+
+            const musicCommands = ['play', 'p', 'skip', 's', 'stop', 'pause', 'queue', 'q', 'clear', 'nowplaying', 'np', '247', 'filter'];
+            if (musicCommands.includes(commandName) || musicCommands.includes(cmdName)) {
+                if (settings.textChannelId && message.channelId !== settings.textChannelId) {
+                    message.delete().catch(() => {});
+                    const embed = new EmbedBuilder()
+                        .setColor(0x111111)
+                        .setDescription(`Please use the dedicated music channel: <#${settings.textChannelId}>`);
+                    const msg = await message.reply({ embeds: [embed] }).catch(() => null);
+                    if (msg) setTimeout(() => msg.delete().catch(() => {}), 7000);
+                    return;
+                }
+            }
         } catch (err: unknown) {
             const message2 = err instanceof Error ? err.message : String(err);
             logger.error('security', `Guild approval/maintenance settings fetch failed: ${message2}`);
@@ -86,6 +101,8 @@ export default {
             if (cmd.executePrefix) {
                 logger.info('discord', `Executing prefix command "${commandName}" by ${message.author.username} in guild ${message.guild.id}`);
                 await cmd.executePrefix(message, args, client);
+
+                logCommandExecution(client, message.guild.id, message.author.id, message.author.username, commandName, args.join(' '));
             } else {
                 const embed = new EmbedBuilder()
                     .setColor(0x111111)

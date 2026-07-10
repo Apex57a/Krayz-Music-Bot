@@ -15,8 +15,18 @@ import { twentyFourSevenGuilds } from '../commands/247';
 import { updateGuildSettings, getGuildSettings } from './database';
 import { logger } from './logger';
 import { getAvailableBot } from './botRouter';
+import { downloadAndCache } from './cacheManager';
 
 const MAX_QUEUE_SIZE = 500;
+import { getCache, setCache } from './cacheLayer';
+
+function getCachedResult(query: string): KazagumoSearchResult | null {
+    return getCache<KazagumoSearchResult>(query);
+}
+
+function setCachedResult(query: string, result: KazagumoSearchResult) {
+    setCache(query, result);
+}
 
 function safeRequester(user: User): { id: string; username: string; avatar: string | null } {
     return {
@@ -82,6 +92,46 @@ function scheduleDeletion(context: ChatInputCommandInteraction | Message, respon
 
 // Global lock to prevent concurrent player creation race conditions
 export const pendingPlayerCreations = new Map<string, Promise<any>>();
+export const actionLocks = new Set<string>();
+
+export async function getOrCreatePlayer(
+    router: any,
+    guildId: string,
+    voiceChannelId: string,
+    textChannelId: string
+) {
+    let player = router.kazagumo.players.get(guildId);
+    
+    if (!player && pendingPlayerCreations.has(guildId)) {
+        try {
+            await pendingPlayerCreations.get(guildId);
+            player = router.kazagumo.players.get(guildId);
+        } catch (e) {}
+    }
+
+    if (!player) {
+        const settings = await getGuildSettings(guildId).catch(() => null);
+        const savedVolume = settings ? settings.volume : 100;
+        const safeVolume = Math.round(Math.pow(savedVolume / 100, 1.5) * 100);
+
+        const creationPromise = router.kazagumo.createPlayer({
+            guildId,
+            voiceId: voiceChannelId,
+            textId: textChannelId,
+            deaf: true,
+            volume: safeVolume,
+            nodeName: 'Node - 1',
+        });
+        pendingPlayerCreations.set(guildId, creationPromise);
+        try {
+            player = await creationPromise;
+            logger.info('music', `Created player for guild ${guildId} at volume ${savedVolume}%`);
+        } finally {
+            pendingPlayerCreations.delete(guildId);
+        }
+    }
+    return player;
+}
 
 export async function playTrack(
     client: Client,
@@ -120,45 +170,18 @@ export async function playTrack(
     let activeClient = router.client;
     let kazagumo = router.kazagumo;
 
-    let player = kazagumo.players.get(guild.id);
-    
-    // Concurrency lock check
-    if (!player && pendingPlayerCreations.has(guild.id)) {
-        try {
-            await pendingPlayerCreations.get(guild.id);
-            player = kazagumo.players.get(guild.id);
-        } catch (e) {
-            // Ignore lock failure, will try to create or fail normally
-        }
+    let player;
+    try {
+        player = await getOrCreatePlayer(router, guild.id, voiceChannel.id, context.channel!.id);
+    } catch (e: any) {
+        logger.error('music', `Kazagumo createPlayer failed: ${e.stack || e.message}`);
+        const embed = new EmbedBuilder().setColor(0x111111).setDescription('Failed to connect to the voice channel (Lavalink node error). Please try again.');
+        const msg = await sendResponse(context, isSlash, { embeds: [embed] }, isSlash, true);
+        scheduleDeletion(context, msg, isSlash);
+        return;
     }
 
-    if (!player) {
-        const settings = await getGuildSettings(guild.id).catch(() => null);
-        const savedVolume = settings ? settings.volume : 100;
-        const safeVolume = Math.round(Math.pow(savedVolume / 100, 1.5) * 100);
-
-        try {
-            const creationPromise = kazagumo.createPlayer({
-                guildId: guild.id,
-                voiceId: voiceChannel.id,
-                textId: context.channel!.id,
-                deaf: true,
-                volume: safeVolume,
-                nodeName: 'Node - 1',
-            });
-            pendingPlayerCreations.set(guild.id, creationPromise);
-            player = await creationPromise;
-            pendingPlayerCreations.delete(guild.id);
-            logger.info('music', `Created player for guild ${guild.id} at volume ${savedVolume}%`);
-        } catch (e: any) {
-            pendingPlayerCreations.delete(guild.id);
-            logger.error('music', `Kazagumo createPlayer failed: ${e.stack || e.message}`);
-            const embed = new EmbedBuilder().setColor(0x111111).setDescription('Failed to connect to the voice channel (Lavalink node error). Please try again.');
-            const msg = await sendResponse(context, isSlash, { embeds: [embed] }, isSlash, true);
-            scheduleDeletion(context, msg, isSlash);
-            return;
-        }
-    } else if (player.voiceId !== voiceChannel.id) {
+    if (player.voiceId !== voiceChannel.id) {
         const embed = new EmbedBuilder().setColor(0x111111).setDescription('You need to be in my voice channel.');
         const msg = await sendResponse(context, isSlash, { embeds: [embed] }, isSlash, true);
         scheduleDeletion(context, msg, isSlash);
@@ -213,15 +236,18 @@ async function resolveAndQueue(
             query = `${url.origin}${url.pathname}`;
         } catch {}
 
-        let nativeResult: KazagumoSearchResult | null = null;
-        try {
-            nativeResult = await kaz.search(query, { requester: safeRequester(user) });
-        } catch (e: unknown) {
-            logger.error('music', `Spotify native resolution failed: ${e instanceof Error ? e.message : String(e)}`);
+        let nativeResult: KazagumoSearchResult | null = getCachedResult(query);
+        if (!nativeResult) {
+            try {
+                nativeResult = await kaz.search(query, { requester: safeRequester(user) });
+                if (nativeResult) setCachedResult(query, nativeResult);
+            } catch (e: unknown) {
+                logger.error('music', `Spotify native resolution failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
 
         if (nativeResult && nativeResult.tracks.length > 0) {
-            handleResult(client, player, nativeResult, user, context, isSlash, searchMessage);
+            await handleResult(client, player, nativeResult, user, context, isSlash, searchMessage);
             return;
         }
 
@@ -249,7 +275,14 @@ async function resolveAndQueue(
     }
 
     let searchEngine: string | undefined = query.startsWith('http') ? undefined : 'youtube_music';
-    let result = await kaz.search(query, { requester: safeRequester(user), engine: searchEngine });
+    let result = getCachedResult(query);
+    
+    if (!result) {
+        result = await kaz.search(query, { requester: safeRequester(user), engine: searchEngine });
+        if (result && result.tracks.length) {
+            setCachedResult(query, result);
+        }
+    }
 
     if (!result || !result.tracks.length) {
         const engines = ['spotify', 'soundcloud'];
@@ -258,6 +291,7 @@ async function resolveAndQueue(
                 const backupResult = await kaz.search(query, { requester: safeRequester(user), engine });
                 if (backupResult && backupResult.tracks.length) {
                     result = backupResult;
+                    setCachedResult(query, result);
                     break;
                 }
             } catch (e) {}
@@ -271,10 +305,10 @@ async function resolveAndQueue(
         return;
     }
 
-    handleResult(client, player, result, user, context, isSlash, searchMessage);
+    await handleResult(client, player, result, user, context, isSlash, searchMessage);
 }
 
-function handleResult(
+async function handleResult(
     client: Client,
     player: KazagumoPlayer,
     result: KazagumoSearchResult,
@@ -295,19 +329,32 @@ function handleResult(
             .setDescription(`Loaded playlist with ${tracksToAdd.length} tracks. ${result.tracks.length > availableSlots ? `(Truncated due to queue limit of ${MAX_QUEUE_SIZE})` : ''}`);
         
         if (isSlash) {
-            sendResponse(context, isSlash, { embeds: [embed] }, true);
+            await sendResponse(context, isSlash, { embeds: [embed] }, true);
         } else if (searchMessage) {
-            searchMessage.edit({ embeds: [embed] }).catch((e: any) => logger.error('music', 'Failed to edit search message (Playlist): ' + e));
+            await searchMessage.edit({ embeds: [embed] }).catch((e: unknown) => logger.error('music', 'Failed to edit search message (Playlist): ' + String(e)));
         }
     } else {
         const track = result.tracks[0];
+
+        try {
+            const downloadUrl = (track as any).originalUri || track.uri!;
+            const localPath = await downloadAndCache(downloadUrl, track.identifier);
+            if (!(track as any).originalUri) {
+                (track as any).originalUri = track.uri;
+            }
+            track.uri = `file://${localPath}`;
+            track.identifier = localPath;
+        } catch (e: unknown) {
+            logger.error('music', `Failed to cache track: ${e instanceof Error ? e.message : String(e)}`);
+        }
+
         player.queue.add(track);
         const embed = createAddedTrackEmbed(player, track, user, client);
 
         if (isSlash) {
-            sendResponse(context, isSlash, { embeds: [embed] }, true);
+            await sendResponse(context, isSlash, { embeds: [embed] }, true);
         } else if (searchMessage) {
-            searchMessage.edit({ embeds: [embed] }).catch((e: any) => logger.error('music', 'Failed to edit search message (Track): ' + e));
+            await searchMessage.edit({ embeds: [embed] }).catch((e: unknown) => logger.error('music', 'Failed to edit search message (Track): ' + String(e)));
         }
     }
 
@@ -330,17 +377,24 @@ async function resolveFallbackEngines(
     let result: KazagumoSearchResult | null = null;
     const backupEngines = ['youtube_music', 'spotify', 'soundcloud'];
     for (const engine of backupEngines) {
-        try {
-            const backupResult = await kaz.search(query, { requester: safeRequester(user), engine });
-            if (backupResult && backupResult.tracks.length) {
-                result = backupResult;
-                break;
-            }
-        } catch (e) {}
+        let backupResult = getCachedResult(`fallback_${engine}_${query}`);
+        if (!backupResult) {
+            try {
+                backupResult = await kaz.search(query, { requester: safeRequester(user), engine });
+                if (backupResult && backupResult.tracks.length) {
+                    setCachedResult(`fallback_${engine}_${query}`, backupResult);
+                }
+            } catch (e) {}
+        }
+        
+        if (backupResult && backupResult.tracks.length) {
+            result = backupResult;
+            break;
+        }
     }
 
     if (result && result.tracks.length) {
-        handleResult(client, player, result, user, context, isSlash, searchMessage);
+        await handleResult(client, player, result, user, context, isSlash, searchMessage);
     } else {
         const embed = new EmbedBuilder().setColor(0x111111).setDescription('Could not resolve Spotify track on YouTube or SoundCloud.');
         const msg = await sendResponse(context, isSlash, { embeds: [embed] }, true);
@@ -361,9 +415,15 @@ async function hydrateSpotifyPlaylist(
     const kaz = kazagumo || client.kazagumo;
     const firstTrack = tracks.shift();
     if (firstTrack) {
-        let firstResult = await kaz.search(firstTrack.searchQuery, { requester: safeRequester(user), engine: 'youtube_music' });
-        if (!firstResult || !firstResult.tracks.length) {
-            firstResult = await kaz.search(firstTrack.searchQuery, { requester: safeRequester(user), engine: 'spotify' });
+        let firstResult = getCachedResult(`hydrate_${firstTrack.searchQuery}`);
+        if (!firstResult) {
+            firstResult = await kaz.search(firstTrack.searchQuery, { requester: safeRequester(user), engine: 'youtube_music' });
+            if (!firstResult || !firstResult.tracks.length) {
+                firstResult = await kaz.search(firstTrack.searchQuery, { requester: safeRequester(user), engine: 'spotify' });
+            }
+            if (firstResult && firstResult.tracks.length) {
+                setCachedResult(`hydrate_${firstTrack.searchQuery}`, firstResult);
+            }
         }
         if (firstResult && firstResult.tracks.length) {
             player.queue.add(firstResult.tracks[0]);
@@ -400,9 +460,15 @@ async function hydrateSpotifyPlaylist(
             await Promise.all(batch.map(async (track) => {
                 try {
                     if (abortController.signal.aborted || !kaz.players.has(guildId)) return;
-                    let result = await kaz.search(track.searchQuery, { requester: safeRequester(user), engine: 'youtube_music' });
-                    if (!result || !result.tracks.length) {
-                        result = await kaz.search(track.searchQuery, { requester: safeRequester(user), engine: 'spotify' });
+                    let result = getCachedResult(`hydrate_${track.searchQuery}`);
+                    if (!result) {
+                        result = await kaz.search(track.searchQuery, { requester: safeRequester(user), engine: 'youtube_music' });
+                        if (!result || !result.tracks.length) {
+                            result = await kaz.search(track.searchQuery, { requester: safeRequester(user), engine: 'spotify' });
+                        }
+                        if (result && result.tracks.length) {
+                            setCachedResult(`hydrate_${track.searchQuery}`, result);
+                        }
                     }
                     if (result && result.tracks.length && kaz.players.has(guildId)) {
                         player.queue.add(result.tracks[0]);
@@ -415,45 +481,25 @@ async function hydrateSpotifyPlaylist(
             }
         }
         player.data.delete('hydrationController');
-    })();
+    })().catch(e => logger.error('music', `Unhandled error in hydrateSpotifyPlaylist: ${String(e)}`));
 }
 
 export async function skipTrack(
-    client: Client,
-    context: ChatInputCommandInteraction | Message,
-    user: User,
-    isSlash: boolean
+    ctx: import('./context').CommandContext,
+    player: KazagumoPlayer
 ) {
-    const guildId = context.guild!.id;
-    const member = context.member as GuildMember;
-    const voiceChannel = member.voice.channel;
-    
-    if (!voiceChannel) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must join my voice channel to vote.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const router = getAvailableBot(guildId, voiceChannel.id);
-    const player = router ? router.kazagumo.players.get(guildId) : undefined;
-
-    if (!player || !player.queue.current) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('Nothing is playing right now.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    if (player.voiceId !== voiceChannel.id) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You need to be in my voice channel.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
+    const user = ctx.user;
+    const voiceChannel = ctx.voiceChannel!;
+    const member = ctx.member!;
+    const isSlash = ctx.isSlash;
 
     const listeners = voiceChannel.members.filter((m) => !m.user.bot).size;
     const currentTrack = player.queue.current;
+    if (!currentTrack) {
+        const embed = new EmbedBuilder().setColor(0x111111).setDescription('Nothing is playing right now.');
+        await ctx.reply({ embeds: [embed] });
+        return;
+    }
     const isRequester = (currentTrack.requester as { id: string })?.id === user.id;
     const userIsDJ = await isDJ(member);
 
@@ -467,7 +513,7 @@ export async function skipTrack(
             .setColor(0x111111)
             .setDescription(`${currentTrack.title} has been skipped by <@${user.id}>${label}.`);
         
-        await sendResponse(context, isSlash, { embeds: [embed] });
+        await ctx.reply({ embeds: [embed] });
         return;
     }
 
@@ -480,8 +526,8 @@ export async function skipTrack(
 
     if (votes.has(user.id)) {
         const embed = new EmbedBuilder().setColor(0x111111).setDescription(`You already voted to skip (${votes.size}/${required}).`);
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
+        const msg = await ctx.reply({ embeds: [embed] });
+        if (msg && !isSlash) setTimeout(() => msg.delete().catch(() => {}), 10000);
         return;
     }
 
@@ -493,83 +539,29 @@ export async function skipTrack(
         player.data.delete('skipVotes');
 
         const embed = new EmbedBuilder().setColor(0x111111).setDescription(`Skip vote passed. Playing next track.`);
-        await sendResponse(context, isSlash, { embeds: [embed] });
+        await ctx.reply({ embeds: [embed] });
     } else {
         const embed = new EmbedBuilder().setColor(0x111111).setDescription(`<@${user.id}> voted to skip (${votes.size}/${required}).`);
-        await sendResponse(context, isSlash, { embeds: [embed] });
+        await ctx.reply({ embeds: [embed] });
     }
 }
 
 export async function togglePause(
-    client: Client,
-    context: ChatInputCommandInteraction | Message,
-    user: User,
-    isSlash: boolean
+    ctx: import('./context').CommandContext,
+    player: KazagumoPlayer
 ) {
-    const member = context.member as GuildMember;
-    if (!(await isDJ(member))) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must have the DJ role to use this command.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must join my voice channel first.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const router = getAvailableBot(context.guild!.id, voiceChannel.id);
-    const player = router ? router.kazagumo.players.get(context.guild!.id) : undefined;
-    if (!player) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('No active player in this guild.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
     player.pause(!player.paused);
     const embed = new EmbedBuilder()
         .setColor(0x111111)
         .setDescription(`Playback is now ${player.paused ? 'paused' : 'resumed'}.`);
-    await sendResponse(context, isSlash, { embeds: [embed] });
+    await ctx.reply({ embeds: [embed] });
 }
 
 export async function stopPlayback(
-    client: Client,
-    context: ChatInputCommandInteraction | Message,
-    user: User,
-    isSlash: boolean
+    ctx: import('./context').CommandContext,
+    player: KazagumoPlayer
 ) {
-    const member = context.member as GuildMember;
-    if (!(await isDJ(member))) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must have the DJ role to use this command.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const guildId = context.guild!.id;
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must join my voice channel first.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const router = getAvailableBot(guildId, voiceChannel.id);
-    const player = router ? router.kazagumo.players.get(guildId) : undefined;
-    if (!player) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('No active player in this guild.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
+    const guildId = ctx.guild!.id;
     if (twentyFourSevenGuilds.has(guildId)) {
         twentyFourSevenGuilds.delete(guildId);
     }
@@ -585,44 +577,16 @@ export async function stopPlayback(
     const embed = new EmbedBuilder()
         .setColor(0x111111)
         .setDescription('Playback stopped and player disconnected.');
-    await sendResponse(context, isSlash, { embeds: [embed] });
+    await ctx.reply({ embeds: [embed] });
 }
 
 export async function clearQueue(
-    client: Client,
-    context: ChatInputCommandInteraction | Message,
-    user: User,
-    isSlash: boolean
+    ctx: import('./context').CommandContext,
+    player: KazagumoPlayer
 ) {
-    const member = context.member as GuildMember;
-    if (!(await isDJ(member))) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must have the DJ role to use this command.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const voiceChannel = member.voice.channel;
-    if (!voiceChannel) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('You must join my voice channel first.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
-    const router = getAvailableBot(context.guild!.id, voiceChannel.id);
-    const player = router ? router.kazagumo.players.get(context.guild!.id) : undefined;
-    if (!player) {
-        const embed = new EmbedBuilder().setColor(0x111111).setDescription('No active player in this guild.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
-        return;
-    }
-
     if (player.queue.size === 0) {
         const embed = new EmbedBuilder().setColor(0x111111).setDescription('The queue is already empty.');
-        const msg = await sendResponse(context, isSlash, { embeds: [embed] });
-        scheduleDeletion(context, msg, isSlash);
+        await ctx.reply({ embeds: [embed] });
         return;
     }
 
@@ -637,5 +601,5 @@ export async function clearQueue(
     const embed = new EmbedBuilder()
         .setColor(0x111111)
         .setDescription(`Cleared ${count} tracks from the queue.`);
-    await sendResponse(context, isSlash, { embeds: [embed] });
+    await ctx.reply({ embeds: [embed] });
 }

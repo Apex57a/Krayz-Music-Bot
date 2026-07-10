@@ -16,7 +16,54 @@ const pool = mysql.createPool({
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true, minVersion: 'TLSv1.2' } : undefined,
 });
 
-const settingsCache = new Map<string, any>();
+import { RowDataPacket } from 'mysql2';
+
+export interface GuildSettingsData extends RowDataPacket {
+    guildId: string;
+    twentyFourSeven: boolean;
+    djRoleId: string | null;
+    textChannelId: string | null;
+    voiceChannelId: string | null;
+    volume: number;
+    approved: boolean;
+    logChannelId: string | null;
+    logMessages: boolean;
+    logMembers: boolean;
+    maintenance: boolean;
+}
+
+const settingsCache = new Map<string, GuildSettingsData>();
+
+/**
+ * Ping the database to verify connectivity.
+ * Returns true if the connection is healthy, false otherwise.
+ */
+export async function pingDatabase(): Promise<boolean> {
+    try {
+        const connection = await pool.getConnection();
+        try {
+            await connection.ping();
+            return true;
+        } finally {
+            connection.release();
+        }
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('database', `Ping failed: ${message}`);
+        return false;
+    }
+}
+
+/**
+ * Returns the number of guilds currently held in the settings cache.
+ */
+export function getSettingsCacheSize(): number {
+    return settingsCache.size;
+}
+
+export function removeGuildSettings(guildId: string): void {
+    settingsCache.delete(guildId);
+}
 
 async function initializeDatabase() {
     try {
@@ -72,7 +119,7 @@ initializeDatabase();
 
 export async function preloadGuildSettings() {
     try {
-        const [rows]: any = await pool.query('SELECT * FROM GuildSettings');
+        const [rows] = await pool.query<GuildSettingsData[]>('SELECT * FROM GuildSettings');
         for (const g of rows) {
             settingsCache.set(g.guildId, {
                 ...g,
@@ -91,15 +138,15 @@ export async function preloadGuildSettings() {
     }
 }
 
-export async function getGuildSettings(guildId: string) {
+export async function getGuildSettings(guildId: string): Promise<GuildSettingsData> {
     if (settingsCache.has(guildId)) {
-        return settingsCache.get(guildId);
+        return settingsCache.get(guildId)!;
     }
 
     try {
-        const [rows]: any = await pool.execute('SELECT * FROM GuildSettings WHERE guildId = ?', [guildId]);
+        const [rows] = await pool.execute<GuildSettingsData[]>('SELECT * FROM GuildSettings WHERE guildId = ?', [guildId]);
         if (rows.length > 0) {
-            const settings = {
+            const settings: GuildSettingsData = {
                 ...rows[0],
                 twentyFourSeven: !!rows[0].twentyFourSeven,
                 approved: !!rows[0].approved,
@@ -107,12 +154,12 @@ export async function getGuildSettings(guildId: string) {
                 logMembers: !!rows[0].logMembers,
                 maintenance: !!rows[0].maintenance,
                 volume: rows[0].volume ?? 100,
-            };
+            } as GuildSettingsData;
             settingsCache.set(guildId, settings);
             return settings;
         }
 
-        const defaultSettings = {
+        const defaultSettings: GuildSettingsData = {
             guildId,
             twentyFourSeven: false,
             djRoleId: null,
@@ -124,7 +171,7 @@ export async function getGuildSettings(guildId: string) {
             logMessages: false,
             logMembers: false,
             maintenance: false,
-        };
+        } as GuildSettingsData;
 
         await pool.execute(
             'INSERT IGNORE INTO GuildSettings (guildId, twentyFourSeven, volume, approved, logMessages, logMembers, maintenance) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -155,25 +202,24 @@ export async function updateGuildSettings(
         maintenance?: boolean;
     },
 ) {
-    try {
-        const current = await getGuildSettings(guildId);
-        const merged = { ...current, ...data };
+    const current = await getGuildSettings(guildId);
+    const merged = { ...current, ...data };
 
+    try {
         await pool.execute(
             `INSERT INTO GuildSettings (guildId, twentyFourSeven, djRoleId, textChannelId, voiceChannelId, volume, approved, logChannelId, logMessages, logMembers, maintenance, createdAt, updatedAt)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))
-             AS new_row
              ON DUPLICATE KEY UPDATE 
-                twentyFourSeven = new_row.twentyFourSeven,
-                djRoleId = new_row.djRoleId,
-                textChannelId = new_row.textChannelId,
-                voiceChannelId = new_row.voiceChannelId,
-                volume = new_row.volume,
-                approved = new_row.approved,
-                logChannelId = new_row.logChannelId,
-                logMessages = new_row.logMessages,
-                logMembers = new_row.logMembers,
-                maintenance = new_row.maintenance,
+                twentyFourSeven = VALUES(twentyFourSeven),
+                djRoleId = VALUES(djRoleId),
+                textChannelId = VALUES(textChannelId),
+                voiceChannelId = VALUES(voiceChannelId),
+                volume = VALUES(volume),
+                approved = VALUES(approved),
+                logChannelId = VALUES(logChannelId),
+                logMessages = VALUES(logMessages),
+                logMembers = VALUES(logMembers),
+                maintenance = VALUES(maintenance),
                 updatedAt = NOW(3)`,
             [
                 guildId,
@@ -190,18 +236,20 @@ export async function updateGuildSettings(
             ]
         );
 
+        // Only update cache after a successful DB write
         settingsCache.set(guildId, merged);
         return merged;
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error('database', `Error updating settings for guild ${guildId}: ${message}`);
-        throw err;
+        // Return stale cached value instead of crashing on temporary DB outages
+        return current;
     }
 }
 
 export async function getAll247Guilds() {
     try {
-        const [rows]: any = await pool.query(
+        const [rows] = await pool.query<RowDataPacket[]>(
             'SELECT guildId, textChannelId, voiceChannelId FROM GuildSettings WHERE twentyFourSeven = 1'
         );
         return rows;

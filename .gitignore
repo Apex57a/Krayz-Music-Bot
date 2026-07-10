@@ -23,4 +23,9 @@ script.js
 logs.txt
 Information.txt
 state_backup.json
-
+cache/
+temp-musicbot/
+remove_any.ts
+scratch_script.ts
+scratch_script2.ts
+LICENSE.bak

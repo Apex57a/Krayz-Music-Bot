@@ -6,6 +6,7 @@ import {
     EmbedBuilder,
 } from 'discord.js';
 import { config } from '../config';
+import { CommandContext } from '../utils/context';
 
 export default {
     data: new SlashCommandBuilder()
@@ -17,29 +18,34 @@ export default {
         await interaction.deferReply();
         const reply = await interaction.fetchReply();
         const ping = reply.createdTimestamp - interaction.createdTimestamp;
-        await sendStats(client, interaction, ping, true);
+        const ctx = new CommandContext(interaction, true);
+        await sendStats(client, ctx, ping);
     },
 
     async executePrefix(message: Message, args: string[], client: Client) {
         const reply = await message.reply('Fetching statistics...');
         const ping = reply.createdTimestamp - message.createdTimestamp;
-        await sendStats(client, message, ping, false, reply);
+        const ctx = new CommandContext(message, false);
+        await sendStats(client, ctx, ping, reply);
     }
 };
 
-async function sendStats(client: Client, context: any, ping: number, isSlash: boolean, prefixReply?: Message) {
+async function sendStats(client: Client, context: CommandContext, ping: number, prefixReply?: Message) {
     const memory = process.memoryUsage();
     const heapUsed = (memory.heapUsed / 1024 / 1024).toFixed(2);
     const rss = (memory.rss / 1024 / 1024).toFixed(2);
-    
-    const { client: clientA, clientB } = require('../index');
 
-    let totalPlayers = clientA.kazagumo.players.size;
-    let wsPingA = clientA.ws.ping;
-    let wsPingB = clientB ? clientB.ws.ping : 'N/A';
+    const { allClients } = require('../index');
+    const clients: Client[] = allClients;
 
-    if (clientB && clientB.kazagumo) {
-        totalPlayers += clientB.kazagumo.players.size;
+    const primary = clients[0];
+    const workers = clients.slice(1);
+
+    let totalPlayers = 0;
+    for (const c of clients) {
+        if (c.kazagumo) {
+            totalPlayers += c.kazagumo.players.size;
+        }
     }
 
     // Process uptime
@@ -47,19 +53,34 @@ async function sendStats(client: Client, context: any, ping: number, isSlash: bo
 
     const embed = new EmbedBuilder()
         .setColor(0x111111)
-        .setTitle('📊 Real-Time System Statistics')
+        .setTitle('Real-Time System Statistics')
         .addFields(
-            { name: 'Primary Latency', value: `\`${wsPingA}ms\``, inline: true },
-            { name: 'Worker Latency', value: clientB ? `\`${wsPingB}ms\`` : '`Offline`', inline: true },
-            { name: 'Roundtrip Latency', value: `\`${ping}ms\``, inline: true },
-            { name: 'Uptime', value: uptime, inline: true },
-            { name: 'Memory (RSS / Heap)', value: `\`${rss} MB / ${heapUsed} MB\``, inline: true },
-            { name: 'Active VCs', value: `\`${totalPlayers} streaming\``, inline: true },
-            { name: 'Version', value: `\`v${config.version}\``, inline: true }
+            { name: 'Primary Latency', value: `\`${primary.ws.ping}ms\``, inline: true },
         );
 
-    if (isSlash) {
-        await context.editReply({ embeds: [embed] });
+    // Show each worker's latency
+    if (workers.length === 1) {
+        // Single worker: keep the old "Worker Latency" label
+        embed.addFields({ name: 'Worker Latency', value: `\`${workers[0].ws.ping}ms\``, inline: true });
+    } else if (workers.length > 1) {
+        // Multiple workers: label each one
+        for (let i = 0; i < workers.length; i++) {
+            const wPing = workers[i].isReady() ? `\`${workers[i].ws.ping}ms\`` : '`Offline`';
+            embed.addFields({ name: `Worker-${i + 1} Latency`, value: wPing, inline: true });
+        }
+    }
+
+    embed.addFields(
+        { name: 'Roundtrip Latency', value: `\`${ping}ms\``, inline: true },
+        { name: 'Uptime', value: uptime, inline: true },
+        { name: 'Memory (RSS / Heap)', value: `\`${rss} MB / ${heapUsed} MB\``, inline: true },
+        { name: 'Active VCs', value: `\`${totalPlayers} streaming\``, inline: true },
+        { name: 'Bot Pool', value: `\`1 primary + ${workers.length} worker(s)\``, inline: true },
+        { name: 'Version', value: `\`v${config.version}\``, inline: true }
+    );
+
+    if (context.isSlash) {
+        await context.edit({ embeds: [embed] });
     } else if (prefixReply) {
         await prefixReply.edit({ content: null, embeds: [embed] });
     }

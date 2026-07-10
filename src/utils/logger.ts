@@ -21,25 +21,41 @@ const transport = pino.transport({
     ],
 });
 
-const pinoLogger = pino(transport);
+const pinoLogger = pino(
+    {
+        redact: {
+            paths: [
+                'token',
+                'password',
+                'secret',
+                'authorization',
+                '*.token',
+                '*.password',
+                '*.secret',
+            ],
+            censor: '[REDACTED]',
+        },
+    },
+    transport,
+);
 
 export const logger = {
-    info: (module: string, message: string) => {
-        pinoLogger.info({ module }, message);
+    info: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.info({ module, ...meta }, message);
     },
-    warn: (module: string, message: string) => {
-        pinoLogger.warn({ module }, message);
+    warn: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.warn({ module, ...meta }, message);
     },
-    error: (module: string, message: string) => {
-        pinoLogger.error({ module }, message);
+    error: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.error({ module, ...meta }, message);
     },
-    debug: (module: string, message: string) => {
-        pinoLogger.debug({ module }, message);
+    debug: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.debug({ module, ...meta }, message);
     },
-    fatal: (module: string, message: string) => {
-        pinoLogger.fatal({ module }, message);
+    fatal: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.fatal({ module, ...meta }, message);
     },
-    system: (module: string, message: string) => {
-        pinoLogger.info({ module, system: true }, message);
+    system: (module: string, message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.info({ module, system: true, ...meta }, message);
     },
 };

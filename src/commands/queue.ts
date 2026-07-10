@@ -11,9 +11,11 @@ import {
     MessageFlags,
 } from 'discord.js';
 import { formatDuration } from '../utils/helpers';
-import { getAvailableBot } from '../utils/botRouter';
+import { CommandContext } from '../utils/context';
+import { withPlayerGuard } from '../utils/middlewares';
 
-function getQueueData(player: any, page: number) {
+import { KazagumoPlayer, KazagumoTrack } from 'kazagumo';
+function getQueueData(player: KazagumoPlayer, page: number) {
     const queue = player.queue;
     const tracks = Array.from(queue);
     const totalPages = Math.ceil(tracks.length / 10) || 1;
@@ -27,7 +29,7 @@ function getQueueData(player: any, page: number) {
         .setDescription(`**Now Playing:**\n[${current?.title}](${current?.uri}) - \`${formatDuration(current?.length || 0)}\``);
 
     if (currentTracks.length > 0) {
-        const trackList = currentTracks.map((t: any, i) => {
+        const trackList = currentTracks.map((t: KazagumoTrack, i) => {
             return `\`${start + i + 1}.\` [${t.title}](${t.uri}) - \`${formatDuration(t.length || 0)}\``;
         }).join('\n');
 
@@ -56,6 +58,60 @@ function getQueueData(player: any, page: number) {
     return { embed, components, totalPages };
 }
 
+async function handleQueue(ctx: CommandContext, player: KazagumoPlayer) {
+    if (!player.queue.current) {
+        const msg = await ctx.reply({ content: 'Nothing is currently playing.', flags: MessageFlags.Ephemeral });
+        if (msg && !ctx.isSlash) setTimeout(() => msg.delete().catch(() => {}), 10_000);
+        return;
+    }
+
+    let currentPage = 0;
+    const { embed, components, totalPages } = getQueueData(player, 0);
+
+    const message = await ctx.reply({ embeds: [embed], components, fetchReply: true });
+
+    if (totalPages > 1 && message) {
+        const collector = message.createMessageComponentCollector({
+            componentType: ComponentType.Button,
+            time: 60000,
+        });
+
+        collector.on('collect', async (i) => {
+            if (i.user.id !== ctx.user.id) {
+                await i.reply({ content: 'These buttons are not for you.', flags: MessageFlags.Ephemeral });
+                return;
+            }
+
+            if (i.customId === 'prev_page') currentPage--;
+            else if (i.customId === 'next_page') currentPage++;
+
+            const nextData = getQueueData(player, currentPage);
+            await i.update({
+                embeds: [nextData.embed],
+                components: nextData.components,
+            });
+        });
+
+        collector.on('end', () => {
+            const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder().setCustomId('prev_page').setLabel('Prev').setStyle(ButtonStyle.Secondary).setDisabled(true),
+                new ButtonBuilder().setCustomId('next_page').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(true)
+            );
+            if (ctx.isSlash && ctx.interaction) {
+                ctx.interaction.editReply({ components: [disabledRow] }).catch(() => {});
+            } else if (message.editable) {
+                message.edit({ components: [disabledRow] }).catch(() => {});
+            }
+        });
+    }
+
+    if (ctx.isSlash && ctx.interaction) {
+        setTimeout(() => ctx.interaction!.deleteReply().catch(() => {}), 60_000);
+    } else if (message) {
+        setTimeout(() => message.delete().catch(() => {}), 60_000);
+    }
+}
+
 export default {
     data: new SlashCommandBuilder()
         .setName('queue')
@@ -63,109 +119,18 @@ export default {
     aliases: ['q'],
 
     async execute(interaction: ChatInputCommandInteraction, client: Client) {
-        const voiceChannel = (interaction.member as any).voice?.channel;
-        const router = getAvailableBot(interaction.guild!.id, voiceChannel?.id);
-        const player = router ? router.kazagumo.players.get(interaction.guild!.id) : undefined;
-
-        if (!player || !player.queue.current) {
-            const msg = await interaction.reply({ content: 'Nothing is currently playing.', flags: MessageFlags.Ephemeral, fetchReply: true }).catch(() => null);
-            if (msg) setTimeout(() => interaction.deleteReply().catch(() => {}), 10_000);
-            return;
-        }
-
-        let currentPage = 0;
-        const { embed, components, totalPages } = getQueueData(player, 0);
-
-        const message = await interaction.reply({
-            embeds: [embed],
-            components,
-            fetchReply: true,
+        const ctx = new CommandContext(interaction, true);
+        await withPlayerGuard(ctx, { requirePlayer: true }, async (player) => {
+            if (!player) return;
+            await handleQueue(ctx, player);
         });
-
-        if (totalPages > 1) {
-            const collector = message.createMessageComponentCollector({
-                componentType: ComponentType.Button,
-                time: 60000,
-            });
-
-            collector.on('collect', async (i) => {
-                if (i.user.id !== interaction.user.id) {
-                    await i.reply({ content: 'These buttons are not for you.', flags: MessageFlags.Ephemeral });
-                    return;
-                }
-
-                if (i.customId === 'prev_page') currentPage--;
-                else if (i.customId === 'next_page') currentPage++;
-
-                const nextData = getQueueData(player, currentPage);
-                await i.update({
-                    embeds: [nextData.embed],
-                    components: nextData.components,
-                });
-            });
-
-            collector.on('end', () => {
-                const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder().setCustomId('prev_page').setLabel('Prev').setStyle(ButtonStyle.Secondary).setDisabled(true),
-                    new ButtonBuilder().setCustomId('next_page').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(true)
-                );
-                interaction.editReply({ components: [disabledRow] }).catch(() => {});
-            });
-        }
-
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 60_000);
     },
 
     async executePrefix(message: Message, args: string[], client: Client) {
-        const voiceChannel = message.member?.voice?.channel;
-        const router = getAvailableBot(message.guild!.id, voiceChannel?.id);
-        const player = router ? router.kazagumo.players.get(message.guild!.id) : undefined;
-
-        if (!player || !player.queue.current) {
-            const reply = await message.reply('Nothing is currently playing.').catch(() => null);
-            if (reply) setTimeout(() => reply.delete().catch(() => {}), 10_000);
-            return;
-        }
-
-        let currentPage = 0;
-        const { embed, components, totalPages } = getQueueData(player, 0);
-
-        const reply = await message.reply({
-            embeds: [embed],
-            components,
+        const ctx = new CommandContext(message, false);
+        await withPlayerGuard(ctx, { requirePlayer: true }, async (player) => {
+            if (!player) return;
+            await handleQueue(ctx, player);
         });
-
-        if (totalPages > 1) {
-            const collector = reply.createMessageComponentCollector({
-                componentType: ComponentType.Button,
-                time: 60000,
-            });
-
-            collector.on('collect', async (i) => {
-                if (i.user.id !== message.author.id) {
-                    await i.reply({ content: 'These buttons are not for you.', flags: MessageFlags.Ephemeral });
-                    return;
-                }
-
-                if (i.customId === 'prev_page') currentPage--;
-                else if (i.customId === 'next_page') currentPage++;
-
-                const nextData = getQueueData(player, currentPage);
-                await i.update({
-                    embeds: [nextData.embed],
-                    components: nextData.components,
-                });
-            });
-
-            collector.on('end', () => {
-                const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder().setCustomId('prev_page').setLabel('Prev').setStyle(ButtonStyle.Secondary).setDisabled(true),
-                    new ButtonBuilder().setCustomId('next_page').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(true)
-                );
-                reply.edit({ components: [disabledRow] }).catch(() => {});
-            });
-        }
-
-        setTimeout(() => reply.delete().catch(() => {}), 60_000);
     }
 };

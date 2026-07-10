@@ -4,6 +4,7 @@ import { isMaintenance } from '../../utils/maintenance';
 import { isDJ } from '../../utils/security';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { logCommandExecution } from '../../utils/loggerService';
 
 const DJ_COMMANDS = new Set([
     'play', 'skip', 'stop', 'pause', '247',
@@ -36,14 +37,14 @@ export default {
                 if (!settings.approved && !(isOwner && isSetupCommand)) {
                     const embed = new EmbedBuilder()
                         .setColor(0x111111)
-                        .setDescription('❌ This server is not approved. The bot owner must run `/setup` to approve this server.');
+                        .setDescription('This server is not approved. The bot owner must run `/setup` to approve this server.');
                     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                 }
 
                 if (!isOwner && (isMaintenance() || settings.maintenance)) {
                     const embed = new EmbedBuilder()
                         .setColor(0x111111)
-                        .setTitle('🛠️ Maintenance Mode')
+                        .setTitle('Maintenance Mode')
                         .setDescription('The bot is currently undergoing maintenance in this server or globally. Please check back later.');
                     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                 }
@@ -51,6 +52,19 @@ export default {
                 const message = err instanceof Error ? err.message : String(err);
                 logger.error('security', `Guild approval/maintenance settings fetch failed: ${message}`);
             }
+
+            try {
+                const settings = await getGuildSettings(interaction.guildId);
+                const musicCommands = ['play', 'p', 'skip', 's', 'stop', 'pause', 'queue', 'q', 'clear', 'nowplaying', 'np', '247', 'filter'];
+                if (musicCommands.includes(interaction.commandName)) {
+                    if (settings.textChannelId && interaction.channelId !== settings.textChannelId) {
+                        const embed = new EmbedBuilder()
+                            .setColor(0x111111)
+                            .setDescription(`Please use the dedicated music channel: <#${settings.textChannelId}>`);
+                        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                    }
+                }
+            } catch {}
         }
 
         const command = client.commands.get(interaction.commandName);
@@ -87,6 +101,11 @@ export default {
 
         try {
             await command.execute(interaction, client);
+
+            if (interaction.guildId) {
+                const argParts = interaction.options.data.map(opt => `${opt.name}=${opt.value ?? ''}`);
+                logCommandExecution(client, interaction.guildId, interaction.user.id, interaction.user.username, interaction.commandName, argParts.join(' '));
+            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             logger.error('discord', `Error executing /${interaction.commandName}: ${message}`);

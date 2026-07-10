@@ -38,7 +38,7 @@ export default {
             // bulkDelete filters out messages older than 14 days automatically if 2nd param is true
             const deleted = await channel.bulkDelete(amount, true);
             await interaction.editReply(`✅ Successfully deleted ${deleted.size} messages.`);
-        } catch (error: any) {
+        } catch (error: Error | any) {
             logger.error('discord', `Purge slash command error: ${error.stack || error.message}`);
             await interaction.editReply('❌ Failed to delete messages. Make sure I have the Manage Messages permission, and note that messages older than 14 days cannot be bulk deleted by bots.');
         }
@@ -68,7 +68,7 @@ export default {
             // Send confirmation and auto-delete it after 5 seconds
             const reply = await channel.send(`✅ Successfully deleted ${deleted.size} messages.`);
             setTimeout(() => reply.delete().catch(() => {}), 5000);
-        } catch (error: any) {
+        } catch (error: Error | any) {
             logger.error('discord', `Purge prefix command error: ${error.stack || error.message}`);
             const reply = await channel.send('❌ Failed to delete messages. Make sure I have the Manage Messages permission, and note that messages older than 14 days cannot be bulk deleted by bots.');
             setTimeout(() => reply.delete().catch(() => {}), 5000);

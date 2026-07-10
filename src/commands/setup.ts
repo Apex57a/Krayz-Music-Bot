@@ -26,7 +26,7 @@ export default {
     async execute(interaction: ChatInputCommandInteraction, client: Client) {
         if (!interaction.guild) return;
 
-        if (!interaction.memberPermissions?.has('Administrator') && !(await isDJ(interaction.member as any))) {
+        if (!interaction.memberPermissions?.has('Administrator') && !(await isDJ(interaction.member as import('discord.js').GuildMember))) {
             return interaction.reply({ content: 'You do not have permission to manage logs.', flags: MessageFlags.Ephemeral });
         }
 
@@ -39,7 +39,7 @@ export default {
     async executePrefix(message: Message, args: string[], client: Client) {
         if (!message.guild) return;
 
-        if (!message.member?.permissions.has('Administrator') && !(await isDJ(message.member as any))) {
+        if (!message.member?.permissions.has('Administrator') && !(await isDJ(message.member as import('discord.js').GuildMember))) {
             const reply = await message.reply('You do not have permission to manage logs.');
             setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;

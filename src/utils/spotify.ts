@@ -16,6 +16,7 @@ export interface SpotifyTrackInfo {
 export function parseSpotifyUrl(url: string): { type: 'track' | 'playlist' | 'album'; id: string } | null {
     try {
         const parsed = new URL(url);
+        if (parsed.hostname !== 'open.spotify.com') return null;
         const parts = parsed.pathname.split('/').filter(Boolean);
         if (parts.length >= 2) {
             const type = parts[parts.length - 2] as 'track' | 'playlist' | 'album';
@@ -27,13 +28,83 @@ export function parseSpotifyUrl(url: string): { type: 'track' | 'playlist' | 'al
     return null;
 }
 
+const MAX_RETRIES = 2;
+
+/**
+ * Wrapper around fetch with automatic retry logic.
+ * - HTTP 429: waits Retry-After seconds (capped at 10s), then retries
+ * - HTTP 5xx: exponential backoff (1s, 2s)
+ * - Network errors (fetch throws): retries once after 1s
+ * - Success or 4xx (except 429): returns immediately
+ */
+async function fetchWithRetry(
+    input: string | URL | Request,
+    init?: RequestInit,
+): Promise<Response> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const res = await fetch(input, {
+                ...init,
+                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            });
+
+            // Success or non-retryable 4xx — return immediately
+            if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
+                return res;
+            }
+
+            // HTTP 429 — rate limited
+            if (res.status === 429) {
+                if (attempt < MAX_RETRIES) {
+                    const retryAfter = Math.min(
+                        parseInt(res.headers.get('Retry-After') || '1', 10),
+                        10,
+                    );
+                    logger.warn('spotify', `Rate limited (429), retrying after ${retryAfter}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                    await sleep(retryAfter * 1000);
+                    continue;
+                }
+                return res;
+            }
+
+            // HTTP 5xx — server error, exponential backoff
+            if (res.status >= 500) {
+                if (attempt < MAX_RETRIES) {
+                    const backoff = Math.pow(2, attempt) * 1000; // 1s, 2s
+                    logger.warn('spotify', `Server error (${res.status}), retrying after ${backoff}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                    await sleep(backoff);
+                    continue;
+                }
+                return res;
+            }
+
+            return res;
+        } catch (err) {
+            lastError = err;
+            // Network error — retry once after 1s
+            if (attempt < MAX_RETRIES) {
+                logger.warn('spotify', `Network error, retrying after 1s (attempt ${attempt + 1}/${MAX_RETRIES}): ${err instanceof Error ? err.message : String(err)}`);
+                await sleep(1000);
+                continue;
+            }
+        }
+    }
+
+    throw lastError;
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function scrapeEmbedTracks(type: string, id: string): Promise<SpotifyTrackInfo[]> {
     const url = `https://open.spotify.com/embed/${type}/${id}`;
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -95,19 +166,20 @@ export async function getSpotifyToken(): Promise<string> {
         return cachedToken.accessToken;
     }
 
-    const response = await fetch('https://accounts.spotify.com/api/token', {
+    const response = await fetchWithRetry('https://accounts.spotify.com/api/token', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             Authorization: `Basic ${Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64')}`,
         },
         body: 'grant_type=client_credentials',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
+
+interface SpotifyTokenResponse { access_token: string; expires_in: number; }
 
     if (!response.ok) throw new Error(`Spotify token error: ${response.status}`);
 
-    const data = await response.json() as any;
+    const data = await response.json() as SpotifyTokenResponse;
     cachedToken = {
         accessToken: data.access_token,
         expiresAt: Date.now() + (data.expires_in - 60) * 1000,
@@ -115,19 +187,22 @@ export async function getSpotifyToken(): Promise<string> {
     return cachedToken.accessToken;
 }
 
+interface SpotifyArtist { name: string; }
+interface SpotifyTrackResponse { name: string; artists?: SpotifyArtist[]; }
+interface SpotifyPlaylistResponse { tracks?: { items: { track?: SpotifyTrackResponse, name?: string, artists?: SpotifyArtist[] }[] }; }
+
 async function apiFallback(type: string, id: string): Promise<SpotifyTrackInfo[]> {
     try {
         const token = await getSpotifyToken();
         const headers = { Authorization: `Bearer ${token}` };
 
         if (type === 'track') {
-            const res = await fetch(`https://api.spotify.com/v1/tracks/${id}?market=US`, {
+            const res = await fetchWithRetry(`https://api.spotify.com/v1/tracks/${id}?market=US`, {
                 headers,
-                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
             });
             if (!res.ok) return [];
-            const track = await res.json() as any;
-            const artist = track.artists?.map((a: any) => a.name).join(', ') || 'Unknown';
+            const track = await res.json() as SpotifyTrackResponse;
+            const artist = track.artists?.map(a => a.name).join(', ') || 'Unknown';
             return [{ name: track.name, artist, searchQuery: `${track.name} ${artist}` }];
         }
 
@@ -136,15 +211,14 @@ async function apiFallback(type: string, id: string): Promise<SpotifyTrackInfo[]
             ? `https://api.spotify.com/v1/playlists/${id}?market=US`
             : `https://api.spotify.com/v1/albums/${id}?market=US`;
 
-        const res = await fetch(endpoint, {
+        const res = await fetchWithRetry(endpoint, {
             headers,
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) return [];
-        const data = await res.json() as any;
+        const data = await res.json() as SpotifyPlaylistResponse;
 
         const items = data.tracks?.items || [];
-        return items.map((item: any) => {
+        return items.map(item => {
             const t = item.track || item;
             const name = t.name || 'Unknown';
             const artist = t.artists?.map((a: any) => a.name).join(', ') || 'Unknown';
@@ -176,16 +250,17 @@ export async function fetchSpotifyTracks(url: string): Promise<SpotifyTrackInfo[
     return tracks;
 }
 
+interface SpotifySearchResponse { tracks?: { items: { id: string }[] }; }
+
 export async function resolveSpotifyId(query: string): Promise<string | null> {
     try {
         const token = await getSpotifyToken();
-        const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1&market=US`, {
+        const res = await fetchWithRetry(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1&market=US`, {
             headers: { Authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) return null;
-        const data = await res.json() as any;
-        if (data.tracks?.items?.length > 0) {
+        const data = await res.json() as SpotifySearchResponse;
+        if (data.tracks?.items && data.tracks.items.length > 0) {
             return data.tracks.items[0].id;
         }
     } catch (_e) {}

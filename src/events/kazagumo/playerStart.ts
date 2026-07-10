@@ -1,7 +1,7 @@
 import { KazagumoPlayer, KazagumoTrack } from 'kazagumo';
 import { EmbedBuilder, TextChannel, Client } from 'discord.js';
 import { logger } from '../../utils/logger';
-import { formatDuration } from '../../utils/helpers';
+import { formatDuration, getTrackDisplayUri } from '../../utils/helpers';
 
 export default {
     name: 'playerStart',
@@ -14,10 +14,11 @@ export default {
             const channel = activeClient.channels.cache.get(player.textId) as TextChannel;
             if (channel) {
                 const requesterId = (track.requester as any)?.id;
+                const displayUri = getTrackDisplayUri(track);
                 const embed = new EmbedBuilder()
                     .setColor(0x111111)
                     .setTitle('Now Playing')
-                    .setDescription(`[${track.title}](${track.uri})`)
+                    .setDescription(`[${track.title}](${displayUri})`)
                     .addFields(
                         { name: 'Author', value: track.author || 'Unknown', inline: true },
                         { name: 'Duration', value: track.isStream ? 'LIVE' : formatDuration(track.length || 0), inline: true },

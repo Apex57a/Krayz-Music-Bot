@@ -9,35 +9,33 @@ import {
     ButtonBuilder,
     ButtonStyle,
 } from 'discord.js';
-import { formatDuration } from '../utils/helpers';
-import { getAvailableBot } from '../utils/botRouter';
+import { formatDuration, getTrackDisplayUri } from '../utils/helpers';
+import { CommandContext } from '../utils/context';
+import { withPlayerGuard } from '../utils/middlewares';
 
-function getNowPlayingData(player: any) {
-    const track = player.queue.current;
+import { KazagumoPlayer, KazagumoTrack } from 'kazagumo';
+function getNowPlayingData(player: KazagumoPlayer, track: KazagumoTrack) {
     const position = player.position;
     const duration = track.length || 0;
 
-    // --- Progress bar ---
     const barLength = 20;
     const filledLength = duration > 0 ? Math.round((position / duration) * barLength) : 0;
     const bar = '▬'.repeat(Math.max(0, filledLength)) + '●' + '▬'.repeat(Math.max(0, barLength - filledLength));
 
-    // --- Loop status ---
     const loopMode = player.loop === 'track' ? 'Track' : player.loop === 'queue' ? 'Queue' : 'Off';
 
-    // --- Requester ---
-    const requester = track.requester as any;
+    const requester = track.requester as { globalName?: string, username?: string, tag?: string };
     const requesterName = requester?.globalName || requester?.username || requester?.tag || 'Autoplay';
+
+    const displayUri = getTrackDisplayUri(track);
 
     const embed = new EmbedBuilder()
         .setColor(0x111111)
         .setAuthor({ name: 'Now Playing' })
         .setTitle(track.title || 'Unknown Track')
-        .setURL(track.uri || '')
+        .setURL(displayUri)
         .setThumbnail(track.thumbnail || null)
-        .setDescription(
-            `${bar}\n\`${formatDuration(position)} / ${formatDuration(duration)}\``,
-        )
+        .setDescription(`${bar}\n\`${formatDuration(position)} / ${formatDuration(duration)}\``)
         .addFields(
             { name: 'Artist', value: track.author || 'Unknown', inline: true },
             { name: 'Volume', value: `${player.volume}%`, inline: true },
@@ -48,31 +46,28 @@ function getNowPlayingData(player: any) {
         )
         .setTimestamp();
 
-    // Control buttons
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId('panel_pause')
-            .setLabel('⏯️ Pause/Resume')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId('panel_skip')
-            .setLabel('⏭️ Skip')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId('panel_stop')
-            .setLabel('⏹️ Stop')
-            .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-            .setCustomId('panel_loop')
-            .setLabel('🔁 Loop')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId('panel_shuffle')
-            .setLabel('🔀 Shuffle')
-            .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('panel_pause').setLabel('⏯️ Pause/Resume').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('panel_skip').setLabel('⏭️ Skip').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('panel_stop').setLabel('⏹️ Stop').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('panel_loop').setLabel('🔁 Loop').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('panel_shuffle').setLabel('🔀 Shuffle').setStyle(ButtonStyle.Secondary)
     );
 
     return { embeds: [embed], components: [row] };
+}
+
+async function handleNowPlaying(ctx: CommandContext, player: KazagumoPlayer) {
+    const track = player.queue.current;
+    if (!track) {
+        const msg = await ctx.reply({ content: 'Nothing is playing right now.', flags: MessageFlags.Ephemeral });
+        if (msg && !ctx.isSlash) setTimeout(() => msg.delete().catch(() => {}), 10_000);
+        return;
+    }
+
+    const data = getNowPlayingData(player, track);
+    const msg = await ctx.reply(data);
+    if (msg && !ctx.isSlash) setTimeout(() => msg.delete().catch(() => {}), 30_000);
 }
 
 export default {
@@ -82,30 +77,18 @@ export default {
     aliases: ['np'],
 
     async execute(interaction: ChatInputCommandInteraction, client: Client) {
-        const voiceChannel = (interaction.member as any).voice?.channel;
-        const router = getAvailableBot(interaction.guild!.id, voiceChannel?.id);
-        const player = router ? router.kazagumo.players.get(interaction.guild!.id) : undefined;
-
-        if (!player || !player.queue.current) {
-            return interaction.reply({ content: 'Nothing is playing right now.', flags: MessageFlags.Ephemeral });
-        }
-
-        const data = getNowPlayingData(player);
-        await interaction.reply(data);
+        const ctx = new CommandContext(interaction, true);
+        await withPlayerGuard(ctx, { requirePlayer: true }, async (player) => {
+            if (!player) return;
+            await handleNowPlaying(ctx, player);
+        });
     },
 
     async executePrefix(message: Message, args: string[], client: Client) {
-        const voiceChannel = message.member?.voice?.channel;
-        const router = getAvailableBot(message.guild!.id, voiceChannel?.id);
-        const player = router ? router.kazagumo.players.get(message.guild!.id) : undefined;
-
-        if (!player || !player.queue.current) {
-            return message.reply('Nothing is playing right now.');
-        }
-
-        const data = getNowPlayingData(player);
-        const reply = await message.reply(data).catch(() => null);
-        // Let user see details, don't auto-delete nowplaying replies, or do after 30s
-        if (reply) setTimeout(() => reply.delete().catch(() => {}), 30_000);
+        const ctx = new CommandContext(message, false);
+        await withPlayerGuard(ctx, { requirePlayer: true }, async (player) => {
+            if (!player) return;
+            await handleNowPlaying(ctx, player);
+        });
     }
 };
