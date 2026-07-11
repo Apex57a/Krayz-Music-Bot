@@ -27,8 +27,17 @@ try {
 // Sync serializable entries to disk every 5 minutes
 setInterval(() => {
     try {
+        const safeCache: Record<string, { data: unknown, expiresAt: number }> = {};
+        for (const [k, v] of Object.entries(diskCache)) {
+            try {
+                JSON.stringify(v);
+                safeCache[k] = v;
+            } catch {
+                delete diskCache[k];
+            }
+        }
         const tmpFile = METADATA_CACHE_FILE + '.tmp';
-        fs.writeFileSync(tmpFile, JSON.stringify(diskCache));
+        fs.writeFileSync(tmpFile, JSON.stringify(safeCache));
         fs.renameSync(tmpFile, METADATA_CACHE_FILE);
     } catch (err) {
         logger.warn('system', `Disk cache sync failed: ${err}`);

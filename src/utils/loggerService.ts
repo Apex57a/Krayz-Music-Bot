@@ -84,6 +84,7 @@ export function setupLoggerEvents(client: Client): void {
 
     // --- Message Update ---
     client.on('messageUpdate', async (oldMessage: Message | PartialMessage, newMessage: Message | PartialMessage) => {
+        if (oldMessage.partial) return;
         if (!oldMessage.guild || oldMessage.author?.bot) return;
         if (oldMessage.content === newMessage.content) return;
 
