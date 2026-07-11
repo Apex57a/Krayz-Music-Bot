@@ -308,6 +308,59 @@ async function resolveAndQueue(
     await handleResult(client, player, result, user, context, isSlash, searchMessage);
 }
 
+/**
+ * Attempt to download and cache a single track's audio file.
+ * Mutates track.uri to point to the local file on success.
+ * Returns true if cached successfully, false on failure (playback continues via Lavalink).
+ */
+async function cacheTrackAudio(track: KazagumoTrack): Promise<boolean> {
+    try {
+        // Already cached locally
+        if (track.uri?.startsWith('file://')) return true;
+
+        const downloadUrl = (track as any).originalUri || track.uri!;
+        if (!downloadUrl || downloadUrl.startsWith('file://')) return true;
+
+        const localPath = await downloadAndCache(downloadUrl, track.identifier);
+        if (!(track as any).originalUri) {
+            (track as any).originalUri = track.uri;
+        }
+        track.uri = `file://${localPath}`;
+        track.identifier = localPath;
+        return true;
+    } catch (e: unknown) {
+        logger.error('music', `Failed to cache track: ${e instanceof Error ? e.message : String(e)}`);
+        return false;
+    }
+}
+
+/**
+ * Pre-download the next N tracks in the queue in the background.
+ * Called after playerStart so the next track is ready before the current one ends.
+ * Failures are non-fatal — Lavalink streams the track directly if the download fails.
+ */
+export function preCacheNextTracks(player: KazagumoPlayer, count: number = 2): void {
+    const queue = player.queue;
+    const tracksToCache = [];
+    for (let i = 0; i < Math.min(count, queue.size); i++) {
+        const track = queue[i];
+        if (track && !track.uri?.startsWith('file://')) {
+            tracksToCache.push(track);
+        }
+    }
+
+    if (tracksToCache.length === 0) return;
+
+    // Fire-and-forget background pre-cache
+    (async () => {
+        for (const track of tracksToCache) {
+            // Abort if player was destroyed mid-cache
+            if (!player.guildId) break;
+            await cacheTrackAudio(track);
+        }
+    })().catch(e => logger.error('music', `Pre-cache background error: ${e instanceof Error ? e.message : String(e)}`));
+}
+
 async function handleResult(
     client: Client,
     player: KazagumoPlayer,
@@ -333,20 +386,18 @@ async function handleResult(
         } else if (searchMessage) {
             await searchMessage.edit({ embeds: [embed] }).catch((e: unknown) => logger.error('music', 'Failed to edit search message (Playlist): ' + String(e)));
         }
+
+        // If nothing is playing yet, cache the first track synchronously before play()
+        if (!player.playing && !player.paused && tracksToAdd.length > 0) {
+            await cacheTrackAudio(tracksToAdd[0]);
+        }
+
+        // Background-cache the next few tracks in queue
+        preCacheNextTracks(player, 3);
     } else {
         const track = result.tracks[0];
 
-        try {
-            const downloadUrl = (track as any).originalUri || track.uri!;
-            const localPath = await downloadAndCache(downloadUrl, track.identifier);
-            if (!(track as any).originalUri) {
-                (track as any).originalUri = track.uri;
-            }
-            track.uri = `file://${localPath}`;
-            track.identifier = localPath;
-        } catch (e: unknown) {
-            logger.error('music', `Failed to cache track: ${e instanceof Error ? e.message : String(e)}`);
-        }
+        await cacheTrackAudio(track);
 
         player.queue.add(track);
         const embed = createAddedTrackEmbed(player, track, user, client);

@@ -2,6 +2,7 @@ import { KazagumoPlayer, KazagumoTrack } from 'kazagumo';
 import { EmbedBuilder, TextChannel, Client } from 'discord.js';
 import { logger } from '../../utils/logger';
 import { formatDuration, getTrackDisplayUri } from '../../utils/helpers';
+import { preCacheNextTracks } from '../../utils/music';
 
 export default {
     name: 'playerStart',
@@ -28,5 +29,8 @@ export default {
                 await channel.send({ embeds: [embed] }).catch(() => null);
             }
         }
+
+        // Pre-download next 2 tracks in background so they're ready when this one ends
+        preCacheNextTracks(player, 2);
     }
 };
