@@ -5,14 +5,6 @@ const path = require('path');
 const packageJsonPath = path.join(__dirname, '../package.json');
 const packageData = require(packageJsonPath);
 
-// Auto-bump the patch version (e.g., 1.0.0 -> 1.0.1)
-const versionParts = packageData.version.split('.');
-versionParts[2] = parseInt(versionParts[2], 10) + 1;
-packageData.version = versionParts.join('.');
-
-fs.writeFileSync(packageJsonPath, JSON.stringify(packageData, null, 2));
-console.log(`\n[Versioning] Successfully bumped version to v${packageData.version}`);
-
 const filesToPack = [
     'dist',
     'scripts',
@@ -20,6 +12,7 @@ const filesToPack = [
     'ecosystem.config.js',
     '.env',
     'index.js',
+    'www.youtube.com_cookies.txt'
 ];
 
 console.log("Packing files for production deployment:", filesToPack);
