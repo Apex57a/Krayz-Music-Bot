@@ -4,39 +4,63 @@ All notable changes to Krayz Music are documented here. The format loosely follo
 
 ## [1.0.4-BETA] - 2026-07-13
 
-This release strips out the local audio download system, overhauls the server logging module, and fixes the track skip delay that plagued Spotify playlists. If you are upgrading from 1.0.3, rebuild everything and delete your `cache/metadata_l3.json` file.
-
-### Added
-
-- **Advanced audit logging** (`src/utils/loggerService.ts`). A full rewrite of the event logging system. Now covers: message delete (with native attachment re-upload), message edit (with unfurl detection so link previews don't trigger false edits), bulk delete / purge (generates a `.txt` transcript file named `purge-username-timestamp-count.txt`), member join/leave, kicks, bans/unbans, role changes, nickname changes, timeouts, server mute/deafen, channel create/delete, and voice state changes. Every moderation action pulls the executor from the audit log so you can see *who* did it, not just what happened.
-- **Attachment rendering inside embeds**. When a deleted message had an image, GIF, or video, the bot now downloads the file, re-uploads it, and sets it as the embed's image using Discord's `attachment://` protocol. The attachment shows up inside the log embed instead of floating above it as a separate file. Files are sanitized, renamed, and deleted from disk immediately after upload.
-- **`/setup-logs` command**. Lets admins configure the log channel per server without editing the database manually.
-- **Pre-resolve skip optimization** (`preResolveNextTracks` in `music.ts`). While a track is playing, the bot silently asks Lavalink to resolve the stream URLs for the next 2-3 tracks in the queue. When someone skips, the next track starts instantly instead of waiting 2-4 seconds for resolution. Called automatically on every `playerStart` event and during Spotify playlist hydration.
-- **YouTube cookie authentication** (`config.ts`). Support for a `YOUTUBE_COOKIES_FILE` environment variable pointing to a Netscape-format cookies file. Passed to the Lavalink YouTube plugin to bypass "sign in to confirm you're not a bot" blocks on restricted content.
-
-### Changed
-
-- **Dropped local audio caching entirely**. The `cacheManager.ts` download system (`downloadAndCache`, `cacheTrackAudio`, `preCacheNextTracks`) has been removed. Lavalink already streams audio with 20-second pre-buffering and maximum Opus encoding quality, so downloading tracks locally was redundant overhead that added disk I/O, introduced buffering during downloads, and created a dependency on `yt-dlp` that required constant maintenance to keep working against YouTube's bot detection. The `cache/` directory is now used only for metadata.
-- **Disk cache no longer stores search results**. `KazagumoSearchResult` objects contain class instances (`KazagumoTrack`) that lose their prototype chain when serialized to JSON. Previously, these were written to `cache/metadata_l3.json` and loaded on restart as plain objects, which crashed playback with `setKazagumo is not a function` the moment the bot tried to play a cached track. Search results now live in L1 memory only and expire with the process. Metadata that actually serializes cleanly (Spotify track info, etc.) still persists to disk.
-- **`loggerService.ts` import cleanup**. Removed unused `Collection` import. Added `path` module usage for attachment extension detection.
-
-### Fixed
-
-- **`setKazagumo is not a function` crash on skip**. Root cause: the disk cache (`metadata_l3.json`) stored `KazagumoSearchResult` objects from previous sessions. On restart, these loaded as plain JSON objects without the `KazagumoTrack` prototype. When the player called `track.setKazagumo()` during playback, it threw because the method did not exist on the deserialized object. Fixed by excluding any object with a `tracks` array from L3 disk persistence.
-- **Skip delay on Spotify playlists**. When skipping a track from a Spotify playlist, the bot had to resolve the next track's YouTube stream URL before it could start playing. This took 2-4 seconds. The pre-resolver now handles this in the background so the next track is ready before the user even thinks about skipping.
-- **Attachment logs showing CDN links instead of rendered media**. Images and GIFs sent in deleted messages were logged as clickable URLs or separate file uploads instead of rendering inside the embed. Fixed by using `embed.setImage('attachment://filename.ext')` to embed the first image directly.
+Rebuild everything and delete `cache/metadata_l3.json` if upgrading from 1.0.3.
 
 ### Removed
 
-- `cacheTrackAudio()` function from `music.ts`.
-- `preCacheNextTracks()` function from `music.ts`.
-- `downloadAndCache` import from `music.ts`.
-- All `cacheTrackAudio` calls from `hydrateSpotifyPlaylist`.
-- All `preCacheNextTracks` calls from `playerStart.ts` and the hydration loop (replaced by `preResolveNextTracks`).
+- Removed the local audio download and FLAC caching system.
+  After further testing, pre-downloading complete tracks provided no practical benefit over Lavalink's native streaming while adding unnecessary disk usage, download latency, cache maintenance overhead, and a persistent dependency on `yt-dlp` that broke every time YouTube updated its bot detection. Lavalink already streams with a 20-second pre-buffer and maximum Opus encoding quality. The extra layer was dead weight.
 
-### Upcoming
+- Removed the associated cache manager, download queue, file cleanup routines, disk size limits, and all local playback path handling from the music pipeline.
 
-- Pokemon minigame. Details TBD.
+- Removed search result persistence from the disk cache.
+  Track search results were being saved to `metadata_l3.json` between restarts, but the objects lost their class prototype chain through JSON serialization. On the next boot, the bot loaded them back as plain objects and crashed with `setKazagumo is not a function` the moment it tried to play one. Search results now live in memory only and expire with the process.
+
+### Cancelled
+
+- Discontinued the in-development AI Autoplay system.
+  Autoplay reached an early design stage using the Gemini 3.5 Flash API for intelligent track recommendations, but the development effort is being redirected toward features with broader appeal. The architecture work (bulk prompting, skip feedback learning, scoring) may be revisited in a future release.
+
+### Added
+
+- Full server audit logging.
+  The logging module was rewritten from scratch. It now covers message deletes (with native attachment re-upload), message edits (with unfurl detection so link previews don't trigger false logs), bulk deletes (generates a `.txt` transcript named `purge-username-timestamp-count.txt`), member join/leave, kicks, bans/unbans, role changes, nickname changes, timeouts, server mute/deafen, channel create/delete, and voice state changes. Every moderation action pulls the responsible user from the audit log, so logs show who did it, not just what happened.
+
+- Attachment rendering inside log embeds.
+  When a deleted message contained an image, GIF, or video, the bot now downloads the file, re-uploads it as a Discord attachment, and renders it directly inside the log embed. Previously, attachments showed up as separate files or CDN links above the embed. Files are sanitized, renamed, and removed from disk immediately after upload.
+
+- `/setup-logs` command for admins to configure the log channel per server.
+
+- Pre-resolved track skipping.
+  While a song is playing, the bot silently resolves the stream URLs for the next 2-3 tracks in the queue through Lavalink. When someone skips, the next track is already ready and starts instantly instead of waiting 2-4 seconds for resolution. This runs automatically on every track start and during Spotify playlist loading.
+
+- YouTube cookie authentication support.
+  A `YOUTUBE_COOKIES_FILE` environment variable can now point to a Netscape-format cookies file, which the Lavalink YouTube plugin uses to bypass "sign in to confirm you're not a bot" blocks on restricted content.
+
+### Fixed
+
+- Track skipping crash on Spotify playlists.
+  The `setKazagumo is not a function` error that killed playback after the first skip has been traced to stale search results loaded from the disk cache on restart. Fixed by keeping search results in memory only.
+
+- Multi-second skip delay on Spotify playlists.
+  Skipping previously required resolving the next track's YouTube stream URL on the spot. The pre-resolver now handles this in the background before the skip even happens.
+
+- Attachment logs rendering as CDN links instead of visible media.
+  Images and GIFs from deleted messages now render inside the embed using Discord's `attachment://` protocol.
+
+### Changed
+
+- Simplified the playback pipeline by returning audio delivery entirely to Lavalink.
+- Reduced background disk activity, temporary storage usage, and cache-management overhead.
+- Cleaned up unused imports and dead code paths left behind by the removed systems.
+
+### What's next?
+
+Music remains the foundation of Kray Music, but the next update may bring something beyond music.
+
+A new interactive experience is being explored, built around collecting, progression, battles, and multiplayer interaction.
+
+More details soon.
 
 ---
 
