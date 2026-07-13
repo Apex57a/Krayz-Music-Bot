@@ -8,7 +8,7 @@
 
 Krayz is a privately hosted Discord music bot. It plays audio in voice channels. That is what it does, and it does it without crashing every fifteen minutes, which already puts it ahead of most open-source alternatives.
 
-The entire system is written in TypeScript and runs on discord.js v14, Lavalink v4, and a MySQL database. It is not a general-purpose Discord bot. There are no economy commands, no leveling systems, no reaction roles, and no plans to add any of that. If you are looking for a bot that does everything poorly, look elsewhere.
+The entire system is written in TypeScript and runs on discord.js v14, Lavalink v4, and a MySQL database. Music is the core of this bot and always will be. There are no economy commands, no leveling systems, and no reaction roles. Official first-party features beyond music may be explored over time, but the scope stays focused and anything experimental ships as opt-in.
 
 ## Table of contents
 
@@ -327,7 +327,6 @@ src/
         botPool.ts         Global registry of all Discord clients
         botRouter.ts       Multi-client voice channel assignment with health checks
         cacheLayer.ts      L1/L3 metadata cache (memory + disk JSON)
-        cacheManager.ts    (legacy, unused) Audio download stubs
         context.ts         CommandContext wrapper (normalizes prefix and slash)
         database.ts        MySQL connection pool, settings cache, CRUD operations
         helpers.ts         Duration formatting, embed builders, getTrackDisplayUri
@@ -383,21 +382,12 @@ Set `DEPLOY_COMMANDS=true` in your `.env` and restart. Global registration takes
 **YouTube tracks fail with 403 or "sign in to confirm" errors.**
 Run `node scripts/refresh-youtube.js` to generate an OAuth token and add it to your `.env` as `YOUTUBE_OAUTH_REFRESH_TOKEN`. This authenticates the YouTube plugin and bypasses most restrictions. Without it, age-restricted content and rate-limited searches will fail.
 
-**The "Now Playing" embed shows a file path instead of a YouTube link.**
-This was a bug in versions before v1.0.3 where the locally cached file path overwrote `track.uri` and was never replaced by the original URL in embeds. It is fixed now. Run `npm run build` and restart.
-
-**The bot logs `Failed to sync L3 Disk Cache: Maximum call stack size exceeded`.**
-This was a bug where Kazagumo search results (which contain circular references) were being passed to `JSON.stringify`. Fixed in v1.0.3. The cache layer now tests serializability before writing to disk.
-
-**Cache is using too much disk space.**
-The cleanup runs every 6 hours and enforces a 5 GB cap. You can clear `cache/` manually at any time without breaking anything. The bot will re-download tracks as needed.
-
 **Database connection errors on startup.**
 Make sure MySQL is running and the credentials in `.env` are correct. Run `node scripts/init-db.js` manually to test the connection in isolation.
 
 ## Upcoming
 
-- Pokemon minigame integration. More info soon.
+Music is the foundation of Kray, and that is not changing. But the next update may introduce something new alongside it. More details when the design is finalized.
 
 ## Support policy
 
@@ -420,7 +410,7 @@ If you have an actual bug to report, include the full error stack trace, the ste
 
 This project is authored and engineered by **Derek**.
 
-If you fork, modify, or deploy this codebase in any form, you must retain visible attribution to Derek as the original author. This applies to your repository, your documentation, and any public-facing context where the bot's origin is referenced. Removing attribution is not only disrespectful, it is a violation of the license terms.
+If you fork, modify, or deploy this codebase, attribution to Derek as the original author is appreciated and expected. Keep the copyright notice in the LICENSE file intact (as the MIT License requires), and credit the project in your README or documentation if you use it publicly.
 
 ## License
 

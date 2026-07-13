@@ -4,7 +4,7 @@ You want to contribute. That is appreciated, genuinely. But this is not a reposi
 
 ## Before you start
 
-Krayz is a music bot. It plays audio in Discord voice channels. That is the scope. If your contribution does not directly relate to audio playback, queue management, voice session handling, or the infrastructure that supports those things, it does not belong here.
+Krayz is a music bot. Audio playback, queue management, voice session handling, and the infrastructure supporting those things are the primary scope. Official first-party features beyond music (such as community or interactive systems) may be developed by the maintainer, but unsolicited pull requests for non-music functionality will not be accepted.
 
 Take a minute to understand the architecture before you start changing things. The bot runs a pool of discord.js clients through a routing layer. It uses Kazagumo on top of Shoukaku to manage Lavalink players. Database access is cached in memory. State is serialized to disk on shutdown. Commands go through `CommandContext` and `withPlayerGuard` middleware. If you do not understand how these pieces interact, you are going to break something, and I am going to close your PR.
 
@@ -23,7 +23,7 @@ Pull requests that solve real problems. Here is what qualifies:
 - Cosmetic documentation fixes. Correcting a typo in the README is not a contribution. If the typo causes genuine confusion (a wrong command name, a misleading configuration instruction), that is different. But reformatting a paragraph because you think it reads better is not worth my time or yours.
 - Code style changes. I do not care that you prefer tabs over spaces, that you think `const` should be used instead of `let` in a specific loop, or that you would have structured the imports differently. Unless your style change fixes an actual bug or prevents one, do not submit it.
 - Folder restructuring. The project structure exists for a reason. If you think `utils/music.ts` should be split into six files, you might be right, but open an issue and discuss it first. Do not show up with a 40-file PR that reorganizes everything and expect me to review it.
-- Features unrelated to music. No economy systems. No moderation commands beyond what already exists. No leveling, no XP, no reaction roles, no ticket systems, no welcome messages. I do not care how well you wrote it. It does not belong here.
+- Features unrelated to music. No economy systems. No moderation commands beyond what already exists. No leveling, no XP, no reaction roles, no ticket systems, no welcome messages. Official experimental features beyond music are developed internally and are not open to outside contributions unless explicitly requested.
 - "Refactoring" that changes syntax without changing behavior. Rewriting a `for` loop as a `.reduce()` call does not make the code better. It makes it different. If the refactor does not fix a bug, improve performance, or resolve a type safety issue, leave the code alone.
 
 ## Submitting a pull request
@@ -74,7 +74,7 @@ Do not manually check DJ roles, voice channel presence, or player existence in y
 
 #### Use `getTrackDisplayUri` for track links
 
-If you display a track URL in an embed, call `getTrackDisplayUri(track)` from `src/utils/helpers.ts`. Do not read `track.uri` directly. The audio cache system rewrites `track.uri` to a local `file://` path, and showing that to users is embarrassing. `getTrackDisplayUri` returns the original YouTube/Spotify URL.
+If you display a track URL in an embed, call `getTrackDisplayUri(track)` from `src/utils/helpers.ts`. Do not read `track.uri` directly. `getTrackDisplayUri` returns the original YouTube or Spotify URL, which is what users expect to see in an embed.
 
 #### Use the logger
 
@@ -103,7 +103,7 @@ All queries use parameterized `pool.execute()` calls. No string concatenation in
 
 Run `npx tsc` before pushing. If the TypeScript compiler throws errors, your PR is not ready. Do not open it hoping I will fix the type errors for you.
 
-Test under realistic conditions. If you modified the bot router, verify that swapping between clients works when multiple users run commands at the same time. If you changed the state manager, restart the bot mid-song and confirm the queue restores correctly. If you touched the database layer, test with both a local MySQL instance and the expected production target. If you modified any embed output, play a cached track and verify the display URL is a real YouTube/Spotify link and not a local file path.
+Test under realistic conditions. If you modified the bot router, verify that swapping between clients works when multiple users run commands at the same time. If you changed the state manager, restart the bot mid-song and confirm the queue restores correctly. If you touched the database layer, test with both a local MySQL instance and the expected production target. If you modified any embed output, verify the display URL is a real YouTube or Spotify link.
 
 ### 4. Write a real description
 

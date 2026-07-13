@@ -16,10 +16,10 @@ Rebuild everything and delete `cache/metadata_l3.json` if upgrading from 1.0.3.
 - Removed search result persistence from the disk cache.
   Track search results were being saved to `metadata_l3.json` between restarts, but the objects lost their class prototype chain through JSON serialization. On the next boot, the bot loaded them back as plain objects and crashed with `setKazagumo is not a function` the moment it tried to play one. Search results now live in memory only and expire with the process.
 
-### Cancelled
+### Development paused
 
-- Discontinued the in-development AI Autoplay system.
-  Autoplay reached an early design stage using the Gemini 3.5 Flash API for intelligent track recommendations, but the development effort is being redirected toward features with broader appeal. The architecture work (bulk prompting, skip feedback learning, scoring) may be revisited in a future release.
+- AI Autoplay system.
+  Autoplay reached an early design stage with intelligent track recommendations, but the development effort is being redirected toward features with broader appeal. The architecture work may be revisited in a future release.
 
 ### Added
 
