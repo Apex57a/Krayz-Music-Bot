@@ -94,8 +94,11 @@ export function getCache<T>(key: string): T | null {
         memoryCache.delete(key);
     }
 
+    // Never restore search results from disk — KazagumoTrack instances
+    // lose their prototype chain through JSON serialization, causing
+    // 'setKazagumo is not a function' crashes on playback.
     const l3 = diskCache[key];
-    if (l3) {
+    if (l3 && !(l3.data as any)?.tracks) {
         if (now < l3.expiresAt) {
             memoryCache.set(key, l3);
             return l3.data as T;
@@ -122,8 +125,11 @@ export function setCache(key: string, data: unknown, ttlMs: number = 172_800_000
 
     memoryCache.set(key, entry);
 
-    // Only persist to disk if the data is serializable
-    if (trySerialize(data) !== null) {
+    // Never persist search results to disk. KazagumoSearchResult contains
+    // KazagumoTrack class instances — when reloaded from JSON they become
+    // plain objects and crash with 'setKazagumo is not a function'.
+    const isSearchResult = typeof data === 'object' && data !== null && Array.isArray((data as any).tracks);
+    if (!isSearchResult && trySerialize(data) !== null) {
         diskCache[key] = entry;
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "krayz-bot",
-  "version": "1.0.3",
+  "version": "1.0.4-BETA",
   "engines": {
     "node": ">=18.0.0"
   },

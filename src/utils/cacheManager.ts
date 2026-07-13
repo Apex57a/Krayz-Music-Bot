@@ -26,7 +26,7 @@ export async function downloadAndCache(url: string, trackId: string): Promise<st
 
     const downloadPromise = (async () => {
         try {
-            await youtubedl(url, {
+            const options: Record<string, unknown> = {
                 extractAudio: true,
                 audioFormat: 'flac',
                 audioQuality: '0', // 0 is best
@@ -35,8 +35,17 @@ export async function downloadAndCache(url: string, trackId: string): Promise<st
                 noWarnings: true,
                 preferFreeFormats: true,
                 ffmpegLocation: ffmpegPath || undefined,
+                extractorArgs: 'youtube:player_client=android,web', // Bypass web client bot blocks
                 addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
-            } as Record<string, unknown>);
+            };
+
+            // Import config here to avoid circular dependency issues if any
+            const { config } = require('../config');
+            if (config.youtube.cookiesFile && fs.existsSync(config.youtube.cookiesFile)) {
+                options.cookies = config.youtube.cookiesFile;
+            }
+
+            await youtubedl(url, options);
             return filePath;
         } catch (e: unknown) {
             logger.error('cacheManager', `Youtube-dl execution failed: ${e instanceof Error ? e.message : String(e)}`);

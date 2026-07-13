@@ -15,7 +15,7 @@ import { twentyFourSevenGuilds } from '../commands/247';
 import { updateGuildSettings, getGuildSettings } from './database';
 import { logger } from './logger';
 import { getAvailableBot } from './botRouter';
-import { downloadAndCache } from './cacheManager';
+
 
 const MAX_QUEUE_SIZE = 500;
 import { getCache, setCache } from './cacheLayer';
@@ -308,57 +308,43 @@ async function resolveAndQueue(
     await handleResult(client, player, result, user, context, isSlash, searchMessage);
 }
 
-/**
- * Attempt to download and cache a single track's audio file.
- * Mutates track.uri to point to the local file on success.
- * Returns true if cached successfully, false on failure (playback continues via Lavalink).
- */
-async function cacheTrackAudio(track: KazagumoTrack): Promise<boolean> {
-    try {
-        // Already cached locally
-        if (track.uri?.startsWith('file://')) return true;
-
-        const downloadUrl = (track as any).originalUri || track.uri!;
-        if (!downloadUrl || downloadUrl.startsWith('file://')) return true;
-
-        const localPath = await downloadAndCache(downloadUrl, track.identifier);
-        if (!(track as any).originalUri) {
-            (track as any).originalUri = track.uri;
-        }
-        track.uri = `file://${localPath}`;
-        track.identifier = localPath;
-        return true;
-    } catch (e: unknown) {
-        logger.error('music', `Failed to cache track: ${e instanceof Error ? e.message : String(e)}`);
-        return false;
-    }
-}
 
 /**
- * Pre-download the next N tracks in the queue in the background.
- * Called after playerStart so the next track is ready before the current one ends.
- * Failures are non-fatal — Lavalink streams the track directly if the download fails.
+ * Pre-resolves the next N tracks in the queue in the background.
+ * This fetches the Lavalink track stream URLs ahead of time so that
+ * natural transitions and skips (!s) are perfectly instantaneous.
  */
-export function preCacheNextTracks(player: KazagumoPlayer, count: number = 2): void {
+export function preResolveNextTracks(player: KazagumoPlayer, count: number = 2): void {
     const queue = player.queue;
-    const tracksToCache = [];
-    for (let i = 0; i < Math.min(count, queue.size); i++) {
+    const tracksToResolve = [];
+    
+    // player.queue[0] is the NEXT track to play (current is player.queue.current)
+    for (let i = 0; i < Math.min(count, queue.length); i++) {
         const track = queue[i];
-        if (track && !track.uri?.startsWith('file://')) {
-            tracksToCache.push(track);
+        // Only resolve tracks that aren't already resolved (usually Spotify/Apple Music tracks)
+        // track.track is the base64 string provided by Lavalink when resolved.
+        if (track && !(track as any).track) {
+            tracksToResolve.push(track);
         }
     }
 
-    if (tracksToCache.length === 0) return;
+    if (tracksToResolve.length === 0) return;
 
-    // Fire-and-forget background pre-cache
+    // Fire-and-forget background resolution
     (async () => {
-        for (const track of tracksToCache) {
-            // Abort if player was destroyed mid-cache
+        for (const track of tracksToResolve) {
             if (!player.guildId) break;
-            await cacheTrackAudio(track);
+            try {
+                // We must bind the Kazagumo instance before resolving
+                if (typeof track.setKazagumo === 'function') {
+                    track.setKazagumo(player.kazagumo);
+                }
+                await track.resolve({ player });
+            } catch (e) {
+                logger.debug('music', `Pre-resolve failed for track: ${track.title}`);
+            }
         }
-    })().catch(e => logger.error('music', `Pre-cache background error: ${e instanceof Error ? e.message : String(e)}`));
+    })().catch(() => null);
 }
 
 async function handleResult(
@@ -386,18 +372,8 @@ async function handleResult(
         } else if (searchMessage) {
             await searchMessage.edit({ embeds: [embed] }).catch((e: unknown) => logger.error('music', 'Failed to edit search message (Playlist): ' + String(e)));
         }
-
-        // If nothing is playing yet, cache the first track synchronously before play()
-        if (!player.playing && !player.paused && tracksToAdd.length > 0) {
-            await cacheTrackAudio(tracksToAdd[0]);
-        }
-
-        // Background-cache the next few tracks in queue
-        preCacheNextTracks(player, 3);
     } else {
         const track = result.tracks[0];
-
-        await cacheTrackAudio(track);
 
         player.queue.add(track);
         const embed = createAddedTrackEmbed(player, track, user, client);
@@ -477,7 +453,9 @@ async function hydrateSpotifyPlaylist(
             }
         }
         if (firstResult && firstResult.tracks.length) {
-            player.queue.add(firstResult.tracks[0]);
+            const track = firstResult.tracks[0];
+            if (typeof track.setKazagumo === 'function') track.setKazagumo(kaz);
+            player.queue.add(track);
         }
     }
 
@@ -522,11 +500,16 @@ async function hydrateSpotifyPlaylist(
                         }
                     }
                     if (result && result.tracks.length && kaz.players.has(guildId)) {
-                        player.queue.add(result.tracks[0]);
+                        const resolved = result.tracks[0];
+                        if (typeof resolved.setKazagumo === 'function') resolved.setKazagumo(kaz);
+                        player.queue.add(resolved);
                     }
                 } catch (e) {}
             }));
-            
+
+            // Keep the pre-resolve buffer full as new tracks are added to the queue
+            preResolveNextTracks(player, 3);
+
             if (i + batchSize < tracksToLoad.length) {
                 await new Promise(r => setTimeout(r, 500));
             }

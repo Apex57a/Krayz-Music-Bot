@@ -20,10 +20,11 @@ The entire system is written in TypeScript and runs on discord.js v14, Lavalink 
 - [Configuration](#configuration)
 - [Running the bot](#running-the-bot)
 - [Commands](#commands)
-- [Caching system](#caching-system)
+- [Caching and metadata](#caching-and-metadata)
 - [Project structure](#project-structure)
 - [Deployment](#deployment)
 - [Troubleshooting](#troubleshooting)
+- [Upcoming](#upcoming)
 - [Support policy](#support-policy)
 - [Credits and attribution](#credits-and-attribution)
 - [License](#license)
@@ -59,7 +60,6 @@ withPlayerGuard (DJ check, voice check, action lock, player lookup)
 music.ts (playTrack, skipTrack, stopPlayback, clearQueue, togglePause)
     |
     +--> botRouter.ts (assigns a client from the pool)
-    +--> cacheManager.ts (downloads audio as FLAC via youtube-dl)
     +--> cacheLayer.ts (L1 memory + L3 disk metadata cache)
     +--> spotify.ts (embed scraping + API fallback)
     |
@@ -73,20 +73,22 @@ Kazagumo / Shoukaku --> Lavalink --> Discord Voice
 
 The `botRouter.ts` module manages a pool of Discord clients. The primary client handles all command interactions and guild management. Worker clients carry their own Lavalink connections and join voice channels independently. Add as many workers as you want by setting `WORKER_TOKEN_1`, `WORKER_TOKEN_2`, etc. in your `.env`. The numbering does not need to be sequential because the discovery logic scans all environment keys matching the pattern instead of iterating from 1 to 50 and stopping at the first gap. The legacy `WORKER_TOKEN` (no suffix) still works for single-worker setups, and duplicate tokens are detected and skipped with a console warning.
 
-### Local audio caching
+#### Lavalink-native audio streaming
 
-When a single track is queued, the bot downloads it as a FLAC file to the local `cache/` directory using youtube-dl before handing it to Lavalink. The file name is derived from the track identifier (`pIWaVJPl0-c.flac` for a YouTube video ID). If that file already exists, the download is skipped. The original YouTube or Spotify URL is preserved on the track object so embeds display a clickable link to the source instead of `file://D:\cache\some-id.flac`, which is the kind of thing that makes a bot look like it was written by someone who has never used their own product.
+All audio playback is handled by Lavalink with no local downloads. The Lavalink server is configured with a 20-second audio pre-buffer, maximum Opus encoding quality (10), `HIGH` resampling quality, and Koe high-priority UDP packets. This setup absorbs network jitter and delivers consistent playback without the overhead of downloading files, managing disk space, or fighting YouTube's bot detection on every `yt-dlp` invocation.
 
-Cache cleanup runs every 6 hours. Files older than 24 hours are deleted. If the total cache exceeds 5 GB, the oldest files are evicted until it drops below 4 GB. The 10 GB disk has other things to worry about.
+Earlier versions of the bot downloaded tracks as FLAC files to a local `cache/` directory. That system was removed in v1.0.4 because Lavalink's streaming pipeline already handles buffering, encoding, and delivery. The download layer added disk I/O latency, created a `yt-dlp` maintenance burden, and caused skip delays when the bot had to finish writing a file before playing the next track.
 
-Playlist tracks are not pre-downloaded. Downloading 500 FLAC files upfront would saturate the network, hit rate limits, and delay playback for minutes. Instead, Lavalink streams playlist tracks directly. Only individual `!p <song>` requests get the local cache treatment.
+### Pre-resolved track skipping
+
+While a track is playing, the bot silently asks Lavalink to resolve the stream URLs for the next 2-3 tracks in the queue. When someone skips, the next track starts without any resolution delay. This runs automatically on every `playerStart` event and during Spotify playlist hydration.
 
 ### Metadata caching
 
 Search results, Spotify metadata, and track resolution lookups are cached in a two-tier system inside `cacheLayer.ts`:
 
-- **L1 (memory)**: An in-memory `Map` that holds any object type, including Kazagumo search results that contain circular references and cannot be serialized. Fast, but gone when the process dies.
-- **L3 (disk)**: A JSON file at `cache/metadata_l3.json` that is synced every 5 minutes using atomic writes (write to a temp file, then rename). Only data that survives `JSON.stringify` goes to L3. On startup, the bot loads this file back into L1. So if someone played a 500-track Spotify playlist yesterday and the bot restarted overnight, every one of those track lookups is already cached on boot. No API calls needed.
+- **L1 (memory)**: An in-memory `Map` that holds any object type, including Kazagumo search results with class instances that cannot survive JSON serialization. Fast, but gone when the process dies.
+- **L3 (disk)**: A JSON file at `cache/metadata_l3.json` that is synced every 5 minutes using atomic writes (write to a temp file, then rename). Only data that survives `JSON.stringify` *and* does not contain a `tracks` array goes to L3. Search results stay in L1 only because `KazagumoTrack` instances lose their prototype chain through serialization, which causes `setKazagumo is not a function` crashes if they get loaded back from disk.
 
 Expired entries are swept hourly. Default TTL is 48 hours.
 
@@ -125,6 +127,10 @@ The bot owner can enable maintenance mode globally or per-guild, with an optiona
 ### Per-guild volume persistence
 
 Volume settings are saved per-guild to the database. When a player is created (whether from a play command, a 24/7 reconnection, or a state restore), the bot reads the guild's saved volume and applies it. The volume formula uses a perceptual curve (`Math.pow(linear / 100, 1.5) * 100`) so that the slider feels more natural at low volumes instead of jumping from silent to loud at 10%.
+
+### Server audit logging
+
+The logging service (`loggerService.ts`) monitors Discord events and posts formatted embeds to a configured log channel. Covered events: message delete (with native attachment re-upload inside the embed), message edit (with unfurl detection), bulk delete (generates a text transcript), member join/leave, kicks, bans/unbans, role changes, nickname changes, timeouts, server mute/deafen, channel create/delete, and voice state changes. Every moderation action pulls the executor from the audit log. Admins configure the log channel with `/setup-logs`.
 
 ### Stale player cleanup
 
@@ -272,13 +278,11 @@ These can be restricted to a dedicated channel via `/settings`.
 | `/own` | Management panel. Toggle global/per-guild maintenance, set a custom maintenance reason, switch Lavalink nodes for all active players, and view full system diagnostics (memory, process info, bot pool status, node health, database cache size, version). |
 | `/setup` | Approve a server to use the bot. Unapproved servers cannot use any commands. |
 
-## Caching system
+## Caching and metadata
 
-There are two independent caches, and they solve different problems.
+The metadata cache (`cacheLayer.ts`) stores search results and Spotify lookups. L1 is an in-memory `Map` (fast, ephemeral). L3 is a JSON file on disk (slower, survives restarts). Objects containing `KazagumoTrack` instances (search results) stay in L1 only because their class prototype chain does not survive JSON serialization. Everything else that can be stringified goes to L3.
 
-**Audio cache** (`cacheManager.ts`): Downloads individual tracks as FLAC files to `cache/`. Repeated plays of the same song skip the download entirely. Cleanup runs every 6 hours with a 24-hour age limit and a 5 GB size cap. Playlist tracks are not cached this way because downloading 500 FLACs upfront is insane.
-
-**Metadata cache** (`cacheLayer.ts`): Caches search results and Spotify lookups. L1 is an in-memory `Map` (fast, ephemeral). L3 is a JSON file on disk (slower, survives restarts). Objects with circular references (Kazagumo search results) stay in L1 only because `JSON.stringify` throws a `Maximum call stack size exceeded` error when you try to serialize them, which is a lesson the bot learned the hard way so you do not have to.
+Audio is streamed directly by Lavalink. There is no local file cache.
 
 ## Project structure
 
@@ -323,7 +327,7 @@ src/
         botPool.ts         Global registry of all Discord clients
         botRouter.ts       Multi-client voice channel assignment with health checks
         cacheLayer.ts      L1/L3 metadata cache (memory + disk JSON)
-        cacheManager.ts    Audio file download and FLAC disk cache
+        cacheManager.ts    (legacy, unused) Audio download stubs
         context.ts         CommandContext wrapper (normalizes prefix and slash)
         database.ts        MySQL connection pool, settings cache, CRUD operations
         helpers.ts         Duration formatting, embed builders, getTrackDisplayUri
@@ -390,6 +394,10 @@ The cleanup runs every 6 hours and enforces a 5 GB cap. You can clear `cache/` m
 
 **Database connection errors on startup.**
 Make sure MySQL is running and the credentials in `.env` are correct. Run `node scripts/init-db.js` manually to test the connection in isolation.
+
+## Upcoming
+
+- Pokemon minigame integration. More info soon.
 
 ## Support policy
 

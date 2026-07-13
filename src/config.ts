@@ -66,6 +66,7 @@ export const config = {
     },
     youtube: {
         refreshToken: process.env.YOUTUBE_OAUTH_REFRESH_TOKEN || '',
+        cookiesFile: process.env.YOUTUBE_COOKIES_FILE || '',
     },
     ownerId: process.env.OWNER_ID || '',
     version: require('../package.json').version,

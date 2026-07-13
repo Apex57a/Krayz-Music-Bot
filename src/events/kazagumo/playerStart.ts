@@ -2,7 +2,7 @@ import { KazagumoPlayer, KazagumoTrack } from 'kazagumo';
 import { EmbedBuilder, TextChannel, Client } from 'discord.js';
 import { logger } from '../../utils/logger';
 import { formatDuration, getTrackDisplayUri } from '../../utils/helpers';
-import { preCacheNextTracks } from '../../utils/music';
+import { preResolveNextTracks } from '../../utils/music';
 
 export default {
     name: 'playerStart',
@@ -10,6 +10,9 @@ export default {
     async execute(player: KazagumoPlayer, track: KazagumoTrack, activeClient: Client) {
         if (!track) return;
         logger.info('music', `Now playing: ${track.title} in guild ${player.guildId}`);
+
+        // Resolve upcoming tracks in the background for instant skipping
+        preResolveNextTracks(player, 2);
 
         if (player.textId) {
             const channel = activeClient.channels.cache.get(player.textId) as TextChannel;
@@ -29,8 +32,5 @@ export default {
                 await channel.send({ embeds: [embed] }).catch(() => null);
             }
         }
-
-        // Pre-download next 2 tracks in background so they're ready when this one ends
-        preCacheNextTracks(player, 2);
     }
 };
